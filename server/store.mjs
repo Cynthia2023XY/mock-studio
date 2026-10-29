@@ -1,3 +1,4 @@
+import { StudioError } from './model.mjs';
 import { readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,7 +13,19 @@ export const registryPath = process.env.MOCK_STUDIO_REGISTRY ?? path.resolve(mod
 let writeQueue = Promise.resolve();
 
 /** 读取当前完整 Mock 注册表 */
-export const readRegistry = async () => JSON.parse(await readFile(registryPath, 'utf8'));
+export const readRegistry = async () => {
+  // 只在内存补齐集合，读取旧数据不会触发迁移或落盘。
+  const registry = JSON.parse(await readFile(registryPath, 'utf8'));
+  registry.schemaVersion ??= 1;
+  if (![1, 2].includes(registry.schemaVersion)) throw new StudioError('UNSUPPORTED_SCHEMA', '注册表版本高于当前服务支持范围，请使用兼容版本，禁止自动降级', 409);
+  registry.runtime ??= {};
+  for (const project of registry.projects) {
+    project.endpoints ??= [];
+    project.mocks ??= [];
+    project.combinations ??= [];
+  }
+  return registry;
+};
 
 /** 使用临时文件原子更新 Mock 注册表 */
 export const writeRegistry = async (registry) => {

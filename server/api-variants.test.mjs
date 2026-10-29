@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
 import { spawn, spawnSync } from 'node:child_process';
+import { compileWhistleRules } from './whistle.mjs';
 
 /** 为每个测试服务申请临时端口 */
 const reservePort = () => new Promise((resolve, reject) => {
@@ -115,4 +116,31 @@ test('CLI 为错误参数、无效 JSON 和缺失资源返回非零与结构化�
   const invalid = cli('package-preview', file, 'p');
   assert.equal(invalid.status, 1);
   assert.equal(JSON.parse(invalid.stderr).error.code, 'INVALID_JSON');
+});
+
+/** 验证接口信息编辑后的规则及失败时的数据保护 */
+test('编辑接口地址和方法更新规则，非法或冲突修改不覆盖配置', async (t) => {
+  // 使用隔离注册表验证接口编辑，不触及现有用户配置。
+  const { api } = await createHarness(t);
+  await api('/api/projects', 'POST', { id: 'edit-project', name: '接口编辑' });
+  await api('/api/projects/edit-project/endpoints', 'POST', { id: 'edit-a', name: '原接口', method: 'POST', url: 'http://example.test/old' });
+  await api('/api/projects/edit-project/endpoints', 'POST', { id: 'edit-b', name: '另一接口', method: 'GET', url: 'http://example.test/conflict' });
+  await api('/api/endpoints/edit-a', 'PATCH', { enabled: true });
+  await api('/api/endpoints/edit-b', 'PATCH', { enabled: true });
+  // 修改接口基本信息，并确认服务端返回同步状态。
+  const updated = await api('/api/endpoints/edit-a', 'PATCH', { name: '新接口', method: 'PUT', url: 'http://example.test/new' });
+  assert.equal(updated.status, 200);
+  assert.equal(updated.data.sync.ok, true);
+  assert.equal(updated.data.name, '新接口');
+  // 对保存后的配置重新编译规则，确认旧地址被移除。
+  const state = (await api('/api/state')).data;
+  const rules = compileWhistleRules(state);
+  assert.match(rules, /example\.test\/new.*includeFilter:\/\/m:PUT/);
+  assert.doesNotMatch(rules, /example\.test\/old/);
+  // 非法 URL 和已启用接口冲突均不能覆盖已保存的地址。
+  assert.equal((await api('/api/endpoints/edit-a', 'PATCH', { url: 'invalid' })).data.code, 'INVALID_URL');
+  assert.equal((await api('/api/endpoints/edit-a', 'PATCH', { method: 'GET', url: 'http://example.test/conflict' })).data.code, 'RULE_CONFLICT');
+  const after = (await api('/api/state')).data.projects[0].endpoints.find((endpoint) => endpoint.id === 'edit-a');
+  assert.equal(after.url, 'http://example.test/new');
+  assert.equal(after.method, 'PUT');
 });

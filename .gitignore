@@ -38,3 +38,8 @@ next-env.d.ts
 /work/
 /tsconfig.tsbuildinfo
 /data/generated/mock-studio.whistle.js
+
+# local acceptance artifacts and injected script
+/data/generated/mock-notice.inject.js
+/output/playwright/
+/.playwright-cli/

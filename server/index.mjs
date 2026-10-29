@@ -1,3 +1,6 @@
+import { handleV2Api } from './v2-api.mjs';
+import { checkConflicts } from './rules.mjs';
+import { handleDispatch } from './dispatcher.mjs';
 import http from 'node:http';
 import { createHash, randomBytes } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
@@ -28,7 +31,7 @@ const managementToken = await (async () => {
 const sendJson = (response, statusCode, body, extraHeaders = {}) => {
   response.writeHead(statusCode, {
     'access-control-allow-origin': '*',
-    'access-control-allow-methods': 'GET,POST,PATCH,PUT,DELETE,OPTIONS',
+    'access-control-allow-methods': 'GET,POST,PATCH,PUT,DELETE,HEAD,OPTIONS',
     'access-control-allow-headers': 'content-type, x-mock-token',
     'content-type': 'application/json; charset=utf-8',
     ...extraHeaders,
@@ -42,7 +45,9 @@ const sendJson = (response, statusCode, body, extraHeaders = {}) => {
 const readJsonBody = async (request) => {
   /** 请求体数据块集合 */
   const chunks = [];
-  for await (const chunk of request) chunks.push(chunk);
+  // 限制配置请求体，避免错误文件耗尽本地服务内存。
+  let size = 0;
+  for await (const chunk of request) { size += chunk.length; if (size > 10 * 1024 * 1024) throw new StudioError('PAYLOAD_TOO_LARGE', '配置 JSON 不能超过 10MB', 413); chunks.push(chunk); }
   /** 合并后的请求体文本 */
   const bodyText = Buffer.concat(chunks).toString('utf8').trim();
   return bodyText ? JSON.parse(bodyText) : {};
@@ -60,7 +65,7 @@ const syncAndRecord = async () => {
     // 每次同步都读取队列执行时的最新配置。
     const registry = await readRegistry();
     // 记录文件生成与 Whistle 接收规则的结果。
-    const result = await syncWhistleRules(registry);
+    const result = await syncWhistleRules(registry).catch((error) => ({ ok: false, message: `配置已保存，Whistle 同步失败：${error.message}`, ruleCount: 0 }));
     await mutateRegistry((nextRegistry) => {
       nextRegistry.runtime.whistle = { ...result, syncedAt: new Date().toISOString() };
     });
@@ -70,19 +75,7 @@ const syncAndRecord = async () => {
 };
 
 /** 防止两个启用规则同时匹配同一完整地址与方法 */
-const checkRuleConflicts = (registry, candidate) => {
-  if (!candidate.enabled) return;
-  // 将目标项目与其他启用项目的有效规则一起检查。
-  const entries = [...registry.projects.filter((item) => item.id !== candidate.id && item.enabled), candidate].flatMap((item) => item.endpoints.filter((endpoint) => endpoint.enabled).map((endpoint) => ({ projectId: item.id, endpoint })));
-  // 已出现的接口匹配条件。
-  const seen = new Set();
-  for (const entry of entries) {
-    // 用于判定重复规则或状态迁移的条件。
-    const key = `${entry.endpoint.method} ${entry.endpoint.url}`;
-    if (seen.has(key)) throw new StudioError('RULE_CONFLICT', `启用的接口规则重复：${key}`, 409);
-    seen.add(key);
-  }
-};
+const checkRuleConflicts = checkConflicts;
 
 /** 处理被 Whistle 转发过来的真实 Mock 请求 */
 const handleRuntimeResponse = async (endpointId, request, response) => {
@@ -136,9 +129,15 @@ const handleRequest = async (request, response) => {
     if (pathname === '/api/token' && request.method === 'GET' && origin) return sendJson(response, 200, { token: managementToken });
     if (request.method !== 'OPTIONS' && request.headers['x-mock-token'] !== managementToken) return sendJson(response, 401, { code: 'UNAUTHORIZED', message: '缺少或无效的本机管理令牌' });
   }
-  if (request.method === 'OPTIONS') {
-    sendJson(response, 204, null);
-    return;
+  if (pathname === '/runtime/dispatch') return handleDispatch(request, response, sendJson);
+  // 管理预检先返回，避免被资源变更路由误当成配置操作。
+  if (request.method === 'OPTIONS') return sendJson(response, 204, null);
+  if (await handleV2Api(request, response, pathname, { readJsonBody, sendJson, syncAndRecord })) return;
+  // 迁移后旧 CLI 明确报错，避免无效操作被显示为成功。
+  if (pathname.startsWith('/api/endpoints/')) {
+    // 原始接口到独立规则的映射保存在项目中。
+    const state = await readRegistry();
+    if (!findEndpoint(state, getPathPart(pathname, 2)) && state.projects.some((project) => project.migration?.[getPathPart(pathname, 2)])) throw new StudioError('MIGRATED_ENDPOINT', '旧接口已迁移，请使用 mock-* 或 combination-* 命令及项目编号', 410);
   }
   if (request.method === 'GET' && pathname === '/api/state') {
     sendJson(response, 200, await readRegistry());
@@ -184,12 +183,23 @@ const handleRequest = async (request, response) => {
           if (findEndpoint(registry, endpoint.id)) throw new StudioError('DUPLICATE_ID', '生成的接口编号已存在', 409);
         }
       }
+      // 新版场景包对占用编号做稳定映射，并同步修正每个组合步骤。
+      for (const mock of project.mocks ?? []) {
+        if (registry.projects.some((item) => item.id !== projectId && (item.mocks ?? []).some((entry) => entry.id === mock.id))) {
+          // 相同包导入到另一个项目时不会与原引用混淆。
+          const original = mock.id;
+          mock.id = `mock-${createHash('sha256').update(`${projectId}:${original}`).digest('hex').slice(0, 24)}`;
+          remappedIds[original] = mock.id;
+        }
+      }
+      for (const combination of project.combinations ?? []) for (const step of combination.steps) step.mockId = remappedIds[step.mockId] ?? step.mockId;
       for (const transition of project.flow?.transitions ?? []) transition.endpointId = remappedIds[transition.endpointId] ?? transition.endpointId;
       validateProject(project);
       if (!apply) return { valid: true, project, remappedIds, replacesExisting: Boolean(existing) };
       // 保存受影响项目的配置快照，并标记应用后的配置供恢复冲突检测。
       const snapshot = { id: newId('snapshot'), projectId, previous: existing ? structuredClone(existing) : null, fingerprint: projectFingerprint(project) };
       registry.snapshots = [...(registry.snapshots ?? []), snapshot].slice(-20);
+      if (payload.package.version === 2) registry.schemaVersion = 2;
       if (existing) registry.projects[registry.projects.indexOf(existing)] = project;
       else registry.projects.push(project);
       return { project, remappedIds, snapshotId: snapshot.id };
@@ -235,6 +245,7 @@ const handleRequest = async (request, response) => {
       const match = registry.projects.find((item) => item.id === projectId);
       if (!match) throw new StudioError('PROJECT_NOT_FOUND', '项目不存在', 404);
       for (const endpoint of match.endpoints) endpoint.sequence.currentIndex = 0;
+      for (const combination of match.combinations ?? []) combination.currentIndex = 0;
       if (match.flow) match.flow.currentState = match.flow.initialState;
       return match;
     });
@@ -276,7 +287,7 @@ const handleRequest = async (request, response) => {
       /** 根据名称生成的项目编号 */
       const projectId = payload.id || newId('project');
       /** 待加入注册表的新项目 */
-      const newProject = { id: projectId, name: payload.name || '未命名项目', description: payload.description || '本地 Mock 项目', enabled: true, updatedAt: new Date().toISOString(), endpoints: [] };
+      const newProject = { id: projectId, name: payload.name || '未命名项目', description: payload.description || '本地 Mock 项目', enabled: true, updatedAt: new Date().toISOString(), endpoints: [], mocks: [], combinations: [] };
       validateProject(newProject);
       if (registry.projects.some((item) => item.id === projectId)) throw new StudioError('DUPLICATE_ID', '项目编号已存在', 409);
       registry.projects.push(newProject);

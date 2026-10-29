@@ -24,6 +24,23 @@ test('仅启用的接口生成转发规则', () => {
   const registry = { settings: { apiPort: 17321 }, projects: [{ enabled: true, endpoints: [{ id: 'a', enabled: true, method: 'POST', url: 'http://example.test/a' }, { id: 'b', enabled: false, method: 'POST', url: 'http://example.test/b' }] }] };
   // 保证已关闭接口不会出现在规则正文中。
   const rules = compileWhistleRules(registry);
-  assert.match(rules, /runtime\/respond\/a/);
+  assert.match(rules, /runtime\/dispatch/);
   assert.doesNotMatch(rules, /example\.test\/b/);
+});
+
+
+test('模糊输入仅作为字面值，生成脚本保持 ASCII 且页面 CSP 被保留', async () => {
+  // 包含模板、空格和正则符号的条件不能注入 Whistle 语法。
+  const registry = { settings: { apiPort: 17321 }, projects: [{ enabled: true, endpoints: [], mocks: [{ id: 'm', enabled: true, method: 'POST', match: { type: 'contains', value: '${url} ` (a+b) #' } }] }] };
+  // 编译输出可被 JavaScript 安全加载，不执行输入模板。
+  const rules = compileWhistleRules(registry, 'test-proxy-key');
+  const sandbox = { exports: {} };
+  vm.runInNewContext(renderWhistleConfig(rules), sandbox);
+  assert.equal(sandbox.exports.rules, rules);
+  assert.ok(rules.includes('enable://keepAllCSP'));
+  // 注入资源为 ASCII，即使宿主页缺少 charset 也不会误解析中文字符串。
+  const { readFile } = await import('node:fs/promises');
+  const source = await readFile(new URL('../data/generated/mock-notice.inject.js', import.meta.url), 'utf8');
+  assert.ok([...source].every((character) => character.charCodeAt(0) < 128));
+  assert.doesNotThrow(() => new vm.Script(source));
 });

@@ -15,7 +15,7 @@ const request = async (pathname, method = 'GET', body) => {
   // CLI 从用户本地私有文件读取管理令牌，不输出令牌内容。
   const token = (await readFile(process.env.MOCK_STUDIO_TOKEN_PATH ?? path.join(homedir(), '.mock-studio', 'api-token'), 'utf8')).trim();
   // 管理服务的 HTTP 响应。
-  const response = await fetch(`${apiBase}${pathname}`, { method, headers: { 'content-type': 'application/json', 'x-mock-token': token }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  const response = await fetch(`${apiBase}${pathname}`, { method, signal: AbortSignal.timeout(25000), headers: { 'content-type': 'application/json', 'x-mock-token': token }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   // 管理服务返回的业务结果。
   const data = await response.json();
   if (!response.ok) throw Object.assign(new Error(data.message ?? `HTTP ${response.status}`), { code: data.code ?? 'HTTP_ERROR' });
@@ -43,11 +43,18 @@ const readPackage = async (file) => {
       delete variant.bodyFile;
     }
   }
+  for (const mock of pack.mocks ?? []) if (mock.response?.bodyFile) {
+    // 单条 Mock 的响应文件同样只能位于场景包目录内部。
+    const target = await realpath(path.resolve(root, mock.response.bodyFile));
+    if (!target.startsWith(`${root}${path.sep}`)) throw Object.assign(new Error('bodyFile 必须位于场景包目录内'), { code: 'INVALID_PACKAGE' });
+    mock.response.body = await readJson(target);
+    delete mock.response.bodyFile;
+  }
   return pack;
 };
 
 /** 输出命令调用方式 */
-const help = () => `Mock Studio CLI\n  list [--json]\n  enable|disable <接口ID>\n  mode <接口ID> fixed|sequence\n  use <接口ID> <场景ID>\n  set-body <接口ID> <场景ID> <JSON文件>\n  variant-add <接口ID> <名称> <JSON文件>\n  variant-clone|variant-delete <接口ID> <场景ID>\n  variant-order <接口ID> <场景ID,场景ID,...>\n  sequence-end <接口ID> hold-last|loop\n  reset|next <接口ID>\n  project-enable|project-disable|project-reset <项目ID>\n  flow-set <项目ID> <流程配置JSON>\n  hits [项目ID]\n  package-preview|package-apply <场景包JSON> <项目ID> [replace]\n  package-export <项目ID> <输出JSON文件>\n  package-restore <快照ID>\n  sync\n所有命令均可添加 --json。`;
+const help = () => `Mock Studio CLI\n  list [--json]\n  enable|disable <接口ID>\n  mode <接口ID> fixed|sequence\n  use <接口ID> <场景ID>\n  set-body <接口ID> <场景ID> <JSON文件>\n  variant-add <接口ID> <名称> <JSON文件>\n  variant-clone|variant-delete <接口ID> <场景ID>\n  variant-order <接口ID> <场景ID,场景ID,...>\n  sequence-end <接口ID> hold-last|loop\n  reset|next <接口ID>\n  project-enable|project-disable|project-reset <项目ID>\n  flow-set <项目ID> <流程配置JSON>\n  hits [项目ID]\n  package-preview|package-apply <场景包JSON> <项目ID> [replace]\n  package-export <项目ID> <输出JSON文件>\n  package-restore <快照ID>\n  mock-add <项目ID> <配置JSON>\n  mock-update <项目ID> <MockID> <配置JSON>\n  mock-enable|mock-disable|mock-delete|mock-clone <项目ID> <MockID>\n  mock-order <项目ID> <MockID,MockID,...>\n  combination-add <项目ID> <配置JSON>\n  combination-update <项目ID> <组合ID> <配置JSON>\n  combination-enable|combination-disable|combination-reset|combination-delete <项目ID> <组合ID>\n  migration-preview|migration-apply <项目ID> [预览指纹]\n  sync\n所有命令均可添加 --json。`;
 
 /** 根据命令参数调用稳定的管理接口 */
 const run = async () => {
@@ -58,6 +65,22 @@ const run = async () => {
   if (command === 'sync') return request('/api/whistle/sync', 'POST');
   if (command === 'hits') return request(`/api/hits${id ? `?projectId=${encodeURIComponent(id)}` : ''}`);
   if (!id) throw Object.assign(new Error('缺少资源编号或文件路径'), { code: 'INVALID_ARGUMENT' });
+  if (command === 'migration-preview' || command === 'migration-apply') return request(`/api/projects/${id}/migration/${command.endsWith('preview') ? 'preview' : 'apply'}`, 'POST', { fingerprint: value });
+  if (command.startsWith('mock-') || command.startsWith('combination-')) {
+    // 新命令同时需要项目与资源编号，旧接口命令继续使用原有路由。
+    const [kind, action] = command.split('-');
+    // 允许的动作先校验，避免把拼写错误发送成有效操作。
+    const allowed = ['add', 'update', 'enable', 'disable', 'delete', ...(kind === 'mock' ? ['clone', 'order'] : ['reset'])];
+    if (!allowed.includes(action)) throw Object.assign(new Error('未知资源命令'), { code: 'UNKNOWN_COMMAND' });
+    if (!value) throw Object.assign(new Error('缺少资源编号或 JSON 路径'), { code: 'INVALID_ARGUMENT' });
+    // 项目内的新资源基础路由。
+    const base = `/api/projects/${id}/${kind === 'mock' ? 'mocks' : 'combinations'}`;
+    if (action === 'add') return request(base, 'POST', await readJson(value));
+    if (action === 'order') return request(`${base}/reorder`, 'POST', { ids: value.split(',') });
+    if (['clone', 'reset'].includes(action)) return request(`${base}/${value}/${action}`, 'POST');
+    if (action === 'delete') return request(`${base}/${value}`, 'DELETE');
+    return request(`${base}/${value}`, 'PATCH', action === 'update' ? await readJson(extra) : { enabled: action === 'enable' });
+  }
   if (command === 'package-preview' || command === 'package-apply') {
     if (!value) throw Object.assign(new Error('缺少目标项目编号'), { code: 'INVALID_ARGUMENT' });
     return request(`/api/packages/${command === 'package-preview' ? 'preview' : 'apply'}`, 'POST', { package: await readPackage(id), projectId: value, mode: extra });
@@ -70,7 +93,7 @@ const run = async () => {
     const project = registry.projects.find((item) => item.id === id);
     if (!project) throw Object.assign(new Error('项目不存在'), { code: 'PROJECT_NOT_FOUND' });
     // 待导入或导出的场景包内容。
-    const pack = { version: 1, name: project.name, description: project.description, pageUrl: project.pageUrl, flow: project.flow, endpoints: project.endpoints.map((endpoint) => ({ id: endpoint.id, name: endpoint.name, method: endpoint.method, url: endpoint.url, enabled: endpoint.enabled, mode: endpoint.mode, activeVariantId: endpoint.activeVariantId, sequence: { afterEnd: endpoint.sequence.afterEnd }, stateVariants: endpoint.stateVariants, variants: endpoint.variants })) };
+    const pack = await request(`/api/projects/${id}/export`);
     await writeFile(value, `${JSON.stringify(pack, null, 2)}\n`, { flag: 'wx' });
     return { path: path.resolve(value), projectId: id };
   }

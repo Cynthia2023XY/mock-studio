@@ -34,9 +34,9 @@ const freePort = () => new Promise((resolve, reject) => {
 });
 
 /** 通过独立代理发起完整 URL 的 HTTP 请求 */
-const requestProxy = (port, url, body = '') => new Promise((resolve, reject) => {
+const requestProxy = (port, url, body = '', options = {}) => new Promise((resolve, reject) => {
   // 请求发送到隔离代理，绝不使用系统代理设置。
-  const request = http.request({ host: '127.0.0.1', port, path: url, method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', 'content-length': Buffer.byteLength(body), connection: 'close' } }, (response) => {
+  const request = http.request({ host: '127.0.0.1', port, path: url, method: options.method || 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', 'content-length': Buffer.byteLength(body), connection: 'close', ...options.headers } }, (response) => {
     // 收集代理最终返回的正文与状态。
     const chunks = [];
     response.on('data', (chunk) => chunks.push(chunk));
@@ -53,7 +53,7 @@ test('独立 Whistle：启用时命中，关闭时透传原接口', { skip: !exi
   // 每个实例使用临时目录，不修改用户桌面 Whistle 的规则。
   const directory = await mkdtemp(path.join(tmpdir(), 'mock-studio-whistle-'));
   // 模拟真实接口的独立 HTTP 服务。
-  const origin = await listenLocal((_request, response) => { response.writeHead(200, { 'x-test-source': 'origin' }); response.end('origin'); });
+  const origin = await listenLocal((request, response) => { if (request.url === '/page' || request.url === '/csp') { response.writeHead(200, { 'content-type': 'text/html', ...(request.url === '/csp' ? { 'content-security-policy': "script-src 'self'" } : {}) }); response.end('<html><body>page</body></html>'); return; } response.writeHead(200, { 'x-test-source': 'origin' }); response.end('origin'); });
   // 模拟 Mock 响应的独立 HTTP 服务。
   const mock = await listenLocal((_request, response) => { response.writeHead(200, { 'x-test-source': 'mock' }); response.end('mock'); });
   // 测试专用 Whistle 的本地端口。
@@ -94,6 +94,15 @@ test('独立 Whistle：启用时命中，关闭时透传原接口', { skip: !exi
     assert.equal(JSON.parse(response.body).ec, 0);
   };
   await writeRules();
+  // 实际文档请求被注入提示脚本，普通请求不受影响。
+  const pageUrl = `http://127.0.0.1:${origin.address().port}/page`;
+  const page = await requestProxy(proxyPort, pageUrl, '', { method: 'GET', headers: { 'sec-fetch-dest': 'document' } });
+  assert.match(page.body, /__mockStudioNoticeInstalled/);
+  // Whistle 默认注入可能删除 CSP，托管规则必须明确保留原策略。
+  const protectedPage = await requestProxy(proxyPort, pageUrl.replace('/page', '/csp'), '', { method: 'GET', headers: { 'sec-fetch-dest': 'document' } });
+  assert.equal(protectedPage.headers['content-security-policy'], "script-src 'self'");
+  const plainPage = await requestProxy(proxyPort, pageUrl, '', { method: 'GET' });
+  assert.doesNotMatch(plainPage.body, /__mockStudioNoticeInstalled/);
   // 开启规则后经过代理的响应。
   const intercepted = await requestProxy(proxyPort, originalUrl);
   assert.equal(intercepted.headers['x-test-source'], 'mock');

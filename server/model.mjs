@@ -1,3 +1,4 @@
+import { validateCombinations, makeMock } from './rules.mjs';
 import { randomUUID } from 'node:crypto';
 
 /** 生成可稳定引用的本地资源编号 */
@@ -109,6 +110,7 @@ export const validateProject = (project) => {
     ids.add(endpoint.id);
   }
   validateFlow(project);
+  validateCombinations(project);
   return project;
 };
 
@@ -130,10 +132,11 @@ export const selectRuntime = (project, endpoint) => {
 
 /** 将场景包转成独立项目配置，所有响应数据都必须已内联 */
 export const preparePackage = (pack, projectId) => {
-  if (!pack || pack.version !== 1 || !Array.isArray(pack.endpoints)) throw new StudioError('INVALID_PACKAGE', '场景包版本或接口列表无效');
+  if (!pack || ![1, 2].includes(pack.version) || (pack.version === 1 && !Array.isArray(pack.endpoints))) throw new StudioError('INVALID_PACKAGE', '场景包版本或接口列表无效');
+  if (![pack.endpoints ?? [], pack.mocks ?? [], pack.combinations ?? []].every(Array.isArray) || (pack.version === 1 && ((pack.mocks?.length ?? 0) || (pack.combinations?.length ?? 0)))) throw new StudioError('INVALID_PACKAGE', '场景包集合无效或版本不兼容');
   // 批量导入默认关闭，激活由调用者显式决定。
   const project = { id: projectId, name: pack.name || '导入的场景包', description: pack.description || '导入的本地 Mock 项目', pageUrl: pack.pageUrl || '', enabled: false, updatedAt: new Date().toISOString(), endpoints: [] };
-  for (const input of pack.endpoints) {
+  for (const input of pack.endpoints ?? []) {
     // 按统一默认值补全场景包中的接口配置。
     const endpoint = makeEndpoint({ ...input, enabled: input.enabled ?? true });
     if (!Array.isArray(input.variants) || !input.variants.length) throw new StudioError('INVALID_PACKAGE', '每个接口都必须包含场景');
@@ -147,6 +150,13 @@ export const preparePackage = (pack, projectId) => {
     if (input.stateVariants) endpoint.stateVariants = input.stateVariants;
     project.endpoints.push(endpoint);
   }
+  if ((pack.mocks ?? []).some((item) => !item || typeof item !== 'object' || !item.response || Object.hasOwn(item.response, 'bodyFile'))) throw new StudioError('INVALID_PACKAGE', 'Mock 响应需要完整内联 JSON，请先解析 bodyFile');
+  project.mocks = (pack.mocks ?? []).map((item) => ({ ...makeMock(item), enabled: false }));
+  project.combinations = (pack.combinations ?? []).map((item) => {
+    // 包中不能用空步骤或非对象绕过引用检查。
+    if (!item || typeof item !== 'object') throw new StudioError('INVALID_PACKAGE', '组合配置必须为对象');
+    return { ...item, enabled: false, currentIndex: 0 };
+  });
   if (pack.flow) project.flow = { ...pack.flow, currentState: pack.flow.initialState };
   return validateProject(project);
 };
@@ -163,5 +173,7 @@ export const projectFingerprint = (project) => {
     delete endpoint.updatedAt;
     delete endpoint.sequence.currentIndex;
   }
+  for (const mock of copy.mocks ?? []) { delete mock.stats; delete mock.updatedAt; }
+  for (const combination of copy.combinations ?? []) delete combination.currentIndex;
   return JSON.stringify(copy);
 };

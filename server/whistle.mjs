@@ -1,4 +1,7 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { activeRules, normalizeUrl } from './rules.mjs';
+import { proxyKey } from './dispatcher.mjs';
+import { chmod, mkdir, writeFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import http from 'node:http';
 import { createRequire } from 'node:module';
@@ -9,41 +12,61 @@ import { fileURLToPath } from 'node:url';
 const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
 
 /** 自动生成的 Whistle 规则文件目录 */
-const generatedDirectory = path.resolve(moduleDirectory, '../data/generated');
+const generatedDirectory = process.env.MOCK_STUDIO_GENERATED_DIRECTORY ?? path.resolve(moduleDirectory, '../data/generated');
 
 /** 自动生成的 Whistle JS 配置文件 */
 const generatedRulesPath = path.join(generatedDirectory, 'mock-studio.whistle.js');
 
 /** Whistle 桌面客户端内置的命令行入口 */
-const whistleCliPath = '/Applications/Whistle.app/Contents/Resources/app/node_modules/whistle/bin/whistle.js';
+const whistleCliPath = process.env.MOCK_STUDIO_WHISTLE_CLI ?? '/Applications/Whistle.app/Contents/Resources/app/node_modules/whistle/bin/whistle.js';
 
 /** Whistle 客户端提供的连接配置与认证工具 */
 const requireModule = createRequire(import.meta.url);
 
 /** 注入业务页面的命中提示脚本 */
-const noticeScriptPath = path.resolve(moduleDirectory, 'mock-notice.js');
+const noticeScriptPath = path.join(generatedDirectory, 'mock-notice.inject.js');
+
+/** 生成 ASCII 注入脚本，避免无 charset 或非 UTF-8 页面误解码字符串 */
+const prepareNoticeScript = () => {
+  // 中文源码注释和界面文案统一转为 Unicode 转义，不改变宿主页编码。
+  const source = readFileSync(path.resolve(moduleDirectory, 'mock-notice.js'), 'utf8').replace(/[\u0080-\uffff]/g, (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`);
+  mkdirSync(generatedDirectory, { recursive: true });
+  // 并行验证或多个实例编译时，浏览器不能读到写入一半的脚本。
+  const temporaryPath = `${noticeScriptPath}.${process.pid}.tmp`;
+  writeFileSync(temporaryPath, source, { mode: 0o600 });
+  renameSync(temporaryPath, noticeScriptPath);
+};
 
 /** 将接口 URL 转义为 Whistle 规则中的安全文本 */
 const escapeRuleValue = (value) => String(value).replace(/\s/g, encodeURIComponent);
 
 /** 根据注册表生成所有启用接口的 Whistle 转发规则 */
-export const compileWhistleRules = (registry) => registry.projects
-  .filter((project) => project.enabled)
-  .flatMap((project) => {
-    // 仅在配置了页面地址且存在启用接口时注入提示脚本。
-    const endpoints = project.endpoints.filter((endpoint) => endpoint.enabled);
-    // 接口拦截规则与页面提示规则共享项目开关。
-    const rules = endpoints.map((endpoint) => `${escapeRuleValue(endpoint.url)} http://127.0.0.1:${registry.settings.apiPort}/runtime/respond/${endpoint.id} includeFilter://m:${endpoint.method}`);
-    if (endpoints.length && project.pageUrl) rules.push(`${escapeRuleValue(project.pageUrl)} jsPrepend://${escapeRuleValue(noticeScriptPath)} includeFilter://m:GET`);
-    return rules;
-  })
-  .join('\n');
+export const compileWhistleRules = (registry, runtimeKey = proxyKey) => {
+  // 每条候选范围都转到相同入口，重叠规则不会决定最终响应。
+  const entries = registry.projects.flatMap(activeRules);
+  // 原始地址由代理覆盖写入，运行凭据与管理令牌相互独立。
+  const metadata = 'reqHeaders://`{"x-mock-original-url":"${{url}}","x-mock-proxy-key":"' + runtimeKey + '"}`';
+  // 自动生成的正则只表达字面值，不接受用户提供的正则语法。
+  const literal = (value) => value.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&').replace(/\s/g, (value) => `\\u${value.charCodeAt(0).toString(16).padStart(4, '0')}`).replace(/`/g, '\\x60').replace(/#/g, '\\x23');
+  // 旧接口继续使用原来的前缀范围，新规则明确区分完整匹配与包含匹配。
+  const rules = entries.map((entry) => {
+    // 所有规则共享统一元数据和运行入口。
+    const matcher = entry.match.type === 'legacy' ? escapeRuleValue(entry.match.value) : entry.match.type === 'exact' ? `/^${literal(normalizeUrl(entry.match.value))}$/` : `/^(?=https?:\\/\\/).*${literal(entry.match.value)}/`;
+    return `${matcher} http://127.0.0.1:${registry.settings.apiPort}/runtime/dispatch ${metadata} includeFilter://m:${entry.method}`;
+  }).join('\n');
+  // 仅有启用的候选规则时才注入提示脚本。
+  const hasActiveEndpoint = entries.length > 0;
+  if (hasActiveEndpoint) prepareNoticeScript();
+  // 通过请求目标限制到页面与 iframe，避免改写普通脚本和接口响应。
+  const noticeRule = hasActiveEndpoint ? `/^https?:\\/\\// jsPrepend://${escapeRuleValue(noticeScriptPath)} enable://keepAllCSP includeFilter://reqH:sec-fetch-dest=/^(document|iframe)$/` : '';
+  return [rules, noticeRule].filter(Boolean).join('\n');
+};
 
 /** 生成 Whistle 可覆盖旧规则的配置，空规则使用无副作用的注释占位 */
 export const renderWhistleConfig = (rules) => {
   // Whistle 的 project 接口忽略空字符串，因此空配置也必须发送非空文本。
   const content = rules || '# Mock Studio: 当前没有启用的规则';
-  return `/** Mock Studio 自动生成规则，请勿手工编辑 */\nexports.name = 'mock-studio-managed'\n\n/** 当前已启用接口的转发规则 */\nexports.rules = \`${content}\`\n`;
+  return `/** Mock Studio 自动生成规则，请勿手工编辑 */\nexports.name = 'mock-studio-managed'\n\n/** 当前已启用接口的转发规则 */\nexports.rules = ${JSON.stringify(content)}\n`;
 };
 
 /** 从 Whistle 客户端回读托管规则，确认旧规则确实已被覆盖 */
@@ -82,7 +105,8 @@ export const syncWhistleRules = async (registry) => {
   /** 可被 w2 add 识别的 JS 配置内容 */
   const source = renderWhistleConfig(rules);
   await mkdir(generatedDirectory, { recursive: true });
-  await writeFile(generatedRulesPath, source, 'utf8');
+  await writeFile(generatedRulesPath, source, { encoding: 'utf8', mode: 0o600 });
+  await chmod(generatedRulesPath, 0o600);
   /** Whistle CLI 同步执行结果 */
   const result = spawnSync(process.execPath, [whistleCliPath, 'add', generatedRulesPath, '--client', '--force'], {
     encoding: 'utf8',
