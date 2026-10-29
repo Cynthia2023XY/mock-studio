@@ -1,0 +1,74 @@
+server/whistle.mjs
+  s_eeabf7c40e0a43::t_0a8b956d697706 42-46,75-83,109
+  s_eeabf7c40e0a43::t_92fb898cb9e1ff 100
+  s_eeabf7c40e0a43::t_4ec903425ae262 3-22,47-74,90,93-99,101-102
+  s_eeabf7c40e0a43::t_6ddd8a81e1e8d6 1-2
+  s_eeabf7c40e0a43::t_b47a1b3dc68498 23-25,39-41
+  s_eeabf7c40e0a43::t_ac2409ddff7925 84-89
+  s_eeabf7c40e0a43::t_dd33df4f42207e 91-92
+  s_eeabf7c40e0a43::t_e4c3ae88360c06 103-108
+server/api-variants.test.mjs
+  s_eeabf7c40e0a43::t_4ebfbd6b8068dc 25,27,29,32,56,58,64,67,70,84,88,93,103,107,111,114
+  s_eeabf7c40e0a43::t_83c5276ba66857 1-24,26,28,30-31,33-55,57,59-63,65-66,68-69,71-83,85-87,89-92,94-102,104-106,108-110,112-113,115-118
+bin/mockctl.mjs
+  s_eeabf7c40e0a43::t_61e0dd0a611a8b 16
+  s_eeabf7c40e0a43::t_5861748c660c24 1-15,17-109
+server/integration.test.mjs
+  s_eeabf7c40e0a43::t_5df62823d22a32 98
+  s_eeabf7c40e0a43::t_9891d215e74fee 7-97,99-102
+  s_eeabf7c40e0a43::t_1a2c410f2e6d86 4-6
+  s_eeabf7c40e0a43::t_283d7734fdf290 103
+app/page.tsx
+  s_eeabf7c40e0a43::t_96f06add436f30 23,110-111,202-205
+  s_eeabf7c40e0a43::t_d8a64e076379f9 4,89,137,154,160-178,182,195,198,206,209,214,216,219,229,231,234,249,254,258-259,262,266,270,272,279,284,286,289,295,301,308,311,315,319,326-327,330,333,337,339,350,367,374
+  s_eeabf7c40e0a43::t_fcec9be5865d76 39-53
+  s_eeabf7c40e0a43::t_16df6ff8db4584 392
+  s_eeabf7c40e0a43::t_8186c5c771546c 431
+  s_eeabf7c40e0a43::t_4e8ac72d14570e 1-3,5-22,24-38,54-88,90-109,112-136,138-153,155-159,179-181,183-194,196-197,199-201,207-208,210-213,215,217-218,220-228,230,232-233,235-248,250-253,255-257,260-261,263-265,267-269,271,273-278,280-283,285,287-288,290-294,296-300,302-307,309-310,312-314,316-318,320-325,328-329,331-332,334-336,338,340-349,351-366,368-373,375-391,393-430,432-434
+server/whistle.test.mjs
+  s_eeabf7c40e0a43::t_92e983dbe22517 1-29
+.gitignore
+  s_eeabf7c40e0a43::t_d74d9c8ddb377d 39-40
+  s_eeabf7c40e0a43::t_414abf686f6fb4 36-38
+server/proxy-integration.test.mjs
+  s_eeabf7c40e0a43::t_4ebfbd6b8068dc 55,57,59,63,72,74,82,84,91,97,103
+  s_eeabf7c40e0a43::t_f2f944e0f0d187 1-54,56,58,60-62,64-71,73,75-81,83,85-90,92-96,98-102,104-107
+README.md
+  s_eeabf7c40e0a43::t_52edab9082dbd9 25-26
+  s_eeabf7c40e0a43::t_9381cb39b1ee2c 7
+  s_eeabf7c40e0a43::t_16df6ff8db4584 116
+  s_eeabf7c40e0a43::t_563800820407b4 91-92
+  s_eeabf7c40e0a43::t_7792d46d433ff7 4-6
+  s_eeabf7c40e0a43::t_5440ff6df596ca 8-10,22-24
+  s_eeabf7c40e0a43::t_8173c2eb6bd595 27-29,88-90
+  s_eeabf7c40e0a43::t_6340bb2ed8d08a 93-95,113-115
+  s_eeabf7c40e0a43::t_cd990119068e89 117-119
+server/index.mjs
+  s_eeabf7c40e0a43::t_61e0dd0a611a8b 36-38
+  s_eeabf7c40e0a43::t_3677a459ea667f 1-35,39-87,89-100,102-471,473-494
+  s_eeabf7c40e0a43::t_f13b60e521e68f 88,101,472
+server/model.test.mjs
+  s_eeabf7c40e0a43::t_c611602882039d 1-58,60-72,74-77,79-86,88-90,92-94,96-103,105-107,109-116,118,120-127
+  s_eeabf7c40e0a43::t_4ebfbd6b8068dc 59,73,78,87,91,95,104,108,117,119
+server/mock-notice.test.mjs
+  s_eeabf7c40e0a43::t_4ebfbd6b8068dc 19,21,25,34,38,47,51
+  s_eeabf7c40e0a43::t_719d31cef73ec4 1-18,20,22-24,26-33,35-37,39-46,48-50,52-57
+server/model.mjs
+  s_eeabf7c40e0a43::t_082334a1784a8a 1-167
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "11e86012bb6995c25e14dd11a750d64609189461",
+  "prompts": {},
+  "sessions": {
+    "s_eeabf7c40e0a43": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a186c5-ae72-7490-9d77-80623eff67e2",
+        "model": "gpt-6.1-terra"
+      },
+      "human_author": "dingxinyi.2 <dingxinyi.2@jd.com>"
+    }
+  }
+}
