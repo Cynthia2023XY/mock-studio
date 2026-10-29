@@ -1,0 +1,119 @@
+server/mock-notice.test.mjs
+  s_f15f77ea6bf151::t_59cefeb478c242 13,23,42-44,59-81
+server/rules.test.mjs
+  s_f15f77ea6bf151::t_292cb30223bf32 1-48
+server/rules.mjs
+  s_f15f77ea6bf151::t_abf8b198dbc9a3 9,20
+  s_f15f77ea6bf151::t_7c8b0756dc37e1 1-4,6-8,10-15,17,19,21-33,35-42,44,46-52,54-100
+  s_f15f77ea6bf151::t_59cefeb478c242 5,16,43,45,53
+  s_f15f77ea6bf151::t_292cb30223bf32 18,34
+server/index.mjs
+  s_f15f77ea6bf151::t_a984c93dc37ef0 34
+  s_f15f77ea6bf151::t_7f69f54e1766cb 133-134
+  s_f15f77ea6bf151::t_03207af59dfaab 1-3,68,78,132,135-140,186-195,202,248,290
+  s_f15f77ea6bf151::t_292cb30223bf32 48-50
+components/mock-workspace.tsx
+  s_f15f77ea6bf151::t_9a2b8bfba5786e 1-154
+app/page.tsx
+  s_eeabf7c40e0a43::t_11ae8ab8c3bf70 421,432-448
+  s_f15f77ea6bf151::t_67be7596a1b0c1 7,51
+  s_f15f77ea6bf151::t_566d78c12de5ab 3-4,21,27,205,226,229,360-374,384,391,395,397,403-404,426-427
+  s_f15f77ea6bf151::t_a984c93dc37ef0 429
+  s_eeabf7c40e0a43::t_fb47f7e9ae4d7b 80-89,252-287,289
+  s_f15f77ea6bf151::t_24edacdceb486c 122-123,396
+  s_f15f77ea6bf151::t_6297a6da6fe169 288,449
+server/mock-notice.js
+  s_f15f77ea6bf151::t_1df6c2df8368a8 7,46-52,58,62-67,73-75,77-78,87-89,91-92,101
+  s_eeabf7c40e0a43::t_9f2d11dab66dfb 1,3,6,9,11,13,15-16,24,26-27,29,32,34-45,53,55-57,59-61,68-69,71,97
+  s_eeabf7c40e0a43::t_2cba0d27434e96 8,10,12,14,19,21,33
+  s_f15f77ea6bf151::t_1143abb6b1f722 79-86,90,94
+server/dispatcher.mjs
+  s_f15f77ea6bf151::t_59cefeb478c242 90-93
+  s_f15f77ea6bf151::t_a984c93dc37ef0 105
+  s_f15f77ea6bf151::t_b92fba84509335 1-75,77-89,94-104,106
+  s_f15f77ea6bf151::t_31d4a5d402e41d 76
+server/whistle.mjs
+  s_f15f77ea6bf151::t_292cb30223bf32 15,21
+  s_f15f77ea6bf151::t_dfafde4020dbde 32
+  s_f15f77ea6bf151::t_67be7596a1b0c1 4,108-109
+  s_f15f77ea6bf151::t_0a8d70461e6f15 44,48
+  s_f15f77ea6bf151::t_b92fba84509335 2-3,45-47,49-53,55-58,69
+  s_f15f77ea6bf151::t_24edacdceb486c 1,34-37
+  s_f15f77ea6bf151::t_7b0a1ca689a175 27-31,33,38,59,63
+  s_f15f77ea6bf151::t_1df6c2df8368a8 54
+  s_f15f77ea6bf151::t_60b6a149432cdb 61
+  s_f15f77ea6bf151::t_dcd5018c0ffd8a 60,62
+docs/integration-contract.md
+  s_f15f77ea6bf151::t_67be7596a1b0c1 1-56
+server/whistle.test.mjs
+  s_f15f77ea6bf151::t_59cefeb478c242 30-46
+  s_f15f77ea6bf151::t_292cb30223bf32 27
+.gitignore
+  s_f15f77ea6bf151::t_7b0a1ca689a175 41-45
+README.md
+  s_f15f77ea6bf151::t_67be7596a1b0c1 3-69,107,109,157,193,229
+docs/api-contract-review.md
+  s_f15f77ea6bf151::t_67be7596a1b0c1 1-23
+server/test-support.mjs
+  s_f15f77ea6bf151::t_292cb30223bf32 1-52
+  s_f15f77ea6bf151::t_0a8d70461e6f15 53-79
+bin/mockctl.mjs
+  s_f15f77ea6bf151::t_292cb30223bf32 46-52,57,68-83,96
+  s_f15f77ea6bf151::t_67be7596a1b0c1 18
+server/api-variants.test.mjs
+  s_eeabf7c40e0a43::t_b9794f0f1ab7c2 8,120-145
+  s_eeabf7c40e0a43::t_8ed929f51ce3d4 146
+server/proxy-integration.test.mjs
+  s_f15f77ea6bf151::t_60b6a149432cdb 56,101-103
+  s_eeabf7c40e0a43::t_212fdebdfa3614 37,39,97-100,104-105
+server/store.mjs
+  s_f15f77ea6bf151::t_b92fba84509335 16-19,21-28
+  s_f15f77ea6bf151::t_7f69f54e1766cb 1,20
+server/v2-api.mjs
+  s_f15f77ea6bf151::t_03207af59dfaab 1-7,9-25,27-30,32-52,54-84,86-117,119-137
+  s_f15f77ea6bf151::t_1df6c2df8368a8 26,31
+  s_f15f77ea6bf151::t_24edacdceb486c 118
+  s_f15f77ea6bf151::t_7f69f54e1766cb 53,85
+  s_f15f77ea6bf151::t_59cefeb478c242 8
+docs/implementation-verification.md
+  s_f15f77ea6bf151::t_24edacdceb486c 1-55
+server/v2-api.test.mjs
+  s_f15f77ea6bf151::t_6de16362ac0658 1-13,15,21-25,30-128
+  s_f15f77ea6bf151::t_7f69f54e1766cb 14,16-20
+  s_f15f77ea6bf151::t_1df6c2df8368a8 26
+  s_f15f77ea6bf151::t_24edacdceb486c 27-29
+server/proxy-v2.test.mjs
+  s_f15f77ea6bf151::t_3c6dd9f8a475c9 26-29
+  s_f15f77ea6bf151::t_0a8d70461e6f15 1-25,30-74,78-87
+  s_f15f77ea6bf151::t_4dfa1763022a58 75-77
+server/model.mjs
+  s_f15f77ea6bf151::t_59cefeb478c242 153,155-159
+  s_f15f77ea6bf151::t_292cb30223bf32 136
+  s_f15f77ea6bf151::t_03207af59dfaab 1,113,135,139,154,176-177
+docs/contract-test-cases.md
+  s_f15f77ea6bf151::t_67be7596a1b0c1 1-31
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "00388188793552e837d5f03a7e2766554ae3af10",
+  "prompts": {},
+  "sessions": {
+    "s_eeabf7c40e0a43": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a186c5-ae72-7490-9d77-80623eff67e2",
+        "model": "gpt-6.1-terra"
+      },
+      "human_author": "dingxinyi.2 <dingxinyi.2@jd.com>"
+    },
+    "s_f15f77ea6bf151": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a187e3-a7f7-7d33-959f-6c52e8bd6597",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "dingxinyi.2 <dingxinyi.2@jd.com>"
+    }
+  }
+}
