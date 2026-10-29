@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "settings": {
+    "apiPort": 17321,
+    "webPort": 3000
+  },
+  "runtime": {
+    "whistle": {
+      "ok": false,
+      "rulesPath": "",
+      "ruleCount": 0,
+      "message": "尚未同步 Whistle 规则",
+      "syncedAt": null
+    }
+  },
+  "projects": []
+}
