@@ -1,0 +1,37 @@
+vite.config.ts
+  s_271a6b3a058b91::t_c40ed837a50ef8 49-53
+README.md
+  s_271a6b3a058b91::t_6c2a4a85c30da9 71,73,75,77-79,81-86,88,90,94,96-97,99-114,116,163-164
+  s_271a6b3a058b91::t_9c1459a74b5df8 92
+server/store-initialization.test.mjs
+  s_271a6b3a058b91::t_d6c3dbe664fd61 15
+  s_271a6b3a058b91::t_5c0e2ade702941 1-14,16-30
+scripts/dev.mjs
+  s_271a6b3a058b91::t_0b9d0e1ee83519 2-11,13-21
+server/store.mjs
+  s_271a6b3a058b91::t_c40ed837a50ef8 2-3,13-15,21-28
+bin/mock-studio-launcher.mjs
+  s_271a6b3a058b91::t_c40ed837a50ef8 8,11,13-14
+.gitignore
+  s_271a6b3a058b91::t_c40ed837a50ef8 43-45
+"scripts/Mock Studio.command"
+  s_271a6b3a058b91::t_c40ed837a50ef8 2
+package.json
+  s_271a6b3a058b91::t_c0934d8710f064 9-12,14-15
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "664af0688dfcd3388ed5748db77f4ccb22267ab6",
+  "prompts": {},
+  "sessions": {
+    "s_271a6b3a058b91": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a18c20-9d3f-71c2-9e7d-267e30bbb50b",
+        "model": "gpt-6.1-terra"
+      },
+      "human_author": "dingxinyi.2 <dingxinyi.2@jd.com>"
+    }
+  }
+}
