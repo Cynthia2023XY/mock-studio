@@ -70,6 +70,14 @@ npm run mock -- migration-apply <项目ID> '<预览返回的fingerprint>' --json
 
 ## 启动
 
+### macOS 桌面安装版
+
+当前安装版面向 Apple Silicon macOS，需先单独安装 [Whistle 桌面客户端](https://github.com/avwo/whistle-client/releases)，并放入「应用程序」目录。安装并打开 Mock Studio 后，它会尝试启动或复用 Whistle，并启动自己的本地服务。首次调试 HTTPS 时，请按 Whistle 指引配置代理、安装和信任根证书；如果使用浏览器专用代理，也需确认浏览器请求实际经过 Whistle。
+
+桌面版使用本机 `3000`、`17321` 端口；端口已占用时请先确认并停止冲突程序。Whistle 默认使用 `8888`，启动就绪及规则同步以应用显示的状态为准。桌面版将数据、令牌和日志保存在 `~/Library/Application Support/Mock Studio/`，初次安装为空项目；可通过项目菜单导入场景包。退出桌面版时会尝试清除其托管规则，不会退出用户自己的 Whistle。
+
+在开发环境构建 Apple Silicon 安装包：先安装 Node.js 24 和依赖，再运行 `npm run package:mac`，产物位于 `release/`。未签名和公证的开发包可能受到 macOS 安全提示，仅供受信任的内部测试；发布给其他人前需要准备签名、公证以及全新设备验证。Windows 和 Intel macOS 版本尚未适配验证。
+
 在任意目录使用全局命令启动，启动器会检查 Whistle、启动服务并打开管理页面：
 
 ```bash

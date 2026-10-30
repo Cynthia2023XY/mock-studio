@@ -1,0 +1,17 @@
+#!/bin/sh
+# 使用已安装桌面应用自带的运行时，避免依赖本机 Node。
+set -eu
+# 可选的应用路径覆盖用于安装到其他目录或隔离测试。
+mock_studio_app=${MOCK_STUDIO_APP_PATH:-/Applications/Mock Studio.app}
+# 应用内的 Electron 运行时与 CLI 入口。
+mock_studio_executable="$mock_studio_app/Contents/MacOS/Mock Studio"
+# 应用内只读的管理命令实现。
+mock_studio_entry="$mock_studio_app/Contents/Resources/app/bin/mockctl.mjs"
+if [ ! -x "$mock_studio_executable" ] || [ ! -f "$mock_studio_entry" ]; then
+  printf '%s\n' '未找到 Mock Studio 桌面应用，请安装到“应用程序”目录或设置 MOCK_STUDIO_APP_PATH。' >&2
+  exit 1
+fi
+# 只读取当前用户桌面版令牌，不打印令牌内容。
+export MOCK_STUDIO_TOKEN_PATH="${MOCK_STUDIO_TOKEN_PATH:-$HOME/Library/Application Support/Mock Studio/api-token}"
+export ELECTRON_RUN_AS_NODE=1
+exec "$mock_studio_executable" "$mock_studio_entry" "$@"

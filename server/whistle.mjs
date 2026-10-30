@@ -72,7 +72,7 @@ export const renderWhistleConfig = (rules) => {
 /** 从 Whistle 客户端回读托管规则，确认旧规则确实已被覆盖 */
 const readManagedRules = async () => {
   // 复用客户端配置，确保回读的是 add --client 使用的同一个代理。
-  const client = requireModule('/Applications/Whistle.app/Contents/Resources/app/node_modules/whistle/bin/use.js');
+  const client = requireModule(path.join(path.dirname(whistleCliPath), 'use.js'));
   const config = await new Promise((resolve, reject) => client.getConfig(true, (error, value) => error ? reject(error) : resolve(value)));
   // 请求只读取当前工具管理的规则组，不影响用户其他规则。
   const options = client.getReqOpts(config.options, 'rules/value?name=mock-studio-managed');

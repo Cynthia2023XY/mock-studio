@@ -503,3 +503,17 @@ server.listen(registry.settings.apiPort, host, async () => {
   console.log(`[Mock Studio] API running at http://${host}:${registry.settings.apiPort}`);
   console.log(`[Mock Studio] ${result.message}`);
 });
+
+// 桌面版退出前清除自身托管规则，避免代理继续指向已停止的服务。
+if (process.env.MOCK_STUDIO_CLEAR_ON_EXIT === '1') {
+  process.once('SIGTERM', async () => {
+    try {
+      await syncQueue.catch(() => {});
+      await syncWhistleRules({ settings: registry.settings, projects: [] });
+    } catch (error) {
+      console.error('[Mock Studio] 清理代理规则失败', error);
+    }
+    server.close(() => process.exit(0));
+    setTimeout(() => process.exit(1), 10000).unref();
+  });
+}

@@ -1,0 +1,16 @@
+{
+  "version": 2,
+  "name": "Mock Studio 示例",
+  "description": "用于练习导入、启用与命中验证，使用保留的 example.test 域名。",
+  "mocks": [
+    {
+      "id": "demo-query",
+      "name": "示例查询",
+      "method": "GET",
+      "match": { "type": "exact", "value": "http://example.test/mock-studio/demo" },
+      "response": { "status": 200, "delayMs": 0, "headers": {}, "body": { "success": true, "message": "Mock Studio 示例命中" } }
+    }
+  ],
+  "combinations": [],
+  "endpoints": []
+}

@@ -65,6 +65,10 @@ const formatTime = (value: string | null) => {
 export default function Home() {
   /** 服务端返回的完整注册表 */
   const [registry, setRegistry] = useState<MockRegistry | null>(null);
+  /** 是否显示新建项目输入框 */
+  const [creatingProject, setCreatingProject] = useState(false);
+  /** 待创建的项目名称 */
+  const [newProjectName, setNewProjectName] = useState('');
   /** 当前选中的项目编号 */
   const [activeProjectId, setActiveProjectId] = useState('gold-bean');
   /** 接口名称与地址搜索关键词 */
@@ -341,11 +345,13 @@ export default function Home() {
   /** 通过轻量输入快速创建项目分组 */
   const createProject = async () => {
     /** 用户输入的新项目名称 */
-    const name = window.prompt('项目名称');
+    const name = newProjectName;
     if (!name?.trim()) return;
     /** 新建完成的项目 */
     const project = await apiRequest<MockProject>('/api/projects', { method: 'POST', body: JSON.stringify({ name: name.trim() }) });
     setActiveProjectId(project.id);
+    setCreatingProject(false);
+    setNewProjectName('');
     setFeedback(`项目「${project.name}」已创建`);
     await loadRegistry(true);
   };
@@ -379,11 +385,13 @@ export default function Home() {
           <div className="flex items-center gap-3 pr-4"><div className="grid size-9 place-items-center rounded-xl bg-gradient-to-br from-violet-500 to-cyan-400 shadow-[0_0_24px_rgba(124,92,255,.28)]"><Zap className="size-4 fill-white text-white" /></div><div><p className="text-sm font-semibold tracking-tight">Mock Studio</p><p className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Local response lab</p></div></div>
           <nav className="no-scrollbar flex min-w-0 flex-1 items-end gap-1 overflow-x-auto self-stretch pt-3">
             {(registry?.projects ?? []).map((project) => <button key={project.id} onClick={() => setActiveProjectId(project.id)} className={`relative flex h-full min-w-fit items-center gap-2 rounded-t-lg px-4 text-sm transition ${activeProject?.id === project.id ? 'bg-white/6 text-white' : 'text-slate-500 hover:bg-white/3 hover:text-slate-300'}`}><span className={`size-1.5 rounded-full ${project.enabled ? 'bg-emerald-400' : 'bg-slate-700'}`} />{project.name}{activeProject?.id === project.id && <span className="absolute inset-x-3 bottom-0 h-0.5 rounded-full bg-violet-400" />}</button>)}
-            <button onClick={() => void createProject()} className="grid size-9 min-w-9 place-items-center self-center rounded-lg border border-dashed border-white/12 text-slate-500 hover:border-violet-400/50 hover:text-violet-300" title="新增项目"><Plus className="size-4" /></button>
+            <button onClick={() => setCreatingProject(true)} className="grid size-9 min-w-9 place-items-center self-center rounded-lg border border-dashed border-white/12 text-slate-500 hover:border-violet-400/50 hover:text-violet-300" title="新增项目"><Plus className="size-4" /></button>
           </nav>
 
         </div>
       </header>
+
+      {creatingProject && <div className="fixed inset-0 z-50 grid place-items-center bg-black/70"><form className="w-80 rounded-xl border border-white/10 bg-[#111620] p-5" onSubmit={(event) => { event.preventDefault(); void createProject().catch((error) => setFeedback(error.message)); }}><label className="text-sm text-slate-200" htmlFor="new-project-name">项目名称</label><Input id="new-project-name" autoFocus value={newProjectName} onChange={(event) => setNewProjectName(event.target.value)} className="mt-3" /><div className="mt-4 flex justify-end gap-2"><Button type="button" variant="ghost" onClick={() => setCreatingProject(false)}>取消</Button><Button type="submit" disabled={!newProjectName.trim()}>创建</Button></div></form></div>}
 
       <section className="mx-auto max-w-[1560px] px-5 py-7 lg:px-8">
         <div className="mb-7 flex flex-col justify-between gap-5 lg:flex-row lg:items-end">
