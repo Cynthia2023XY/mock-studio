@@ -5,12 +5,13 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
 import { spawn, spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 /** Mock Studio 项目所在目录 */
-const projectDirectory = '/Users/dingxinyi.2/Documents/practice/mock-studio';
+const projectDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-/** 项目固定使用的 Node 24 可执行文件 */
-const runtimePath = '/Users/dingxinyi.2/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node';
+/** 启动器使用的当前 Node 可执行文件 */
+const runtimePath = process.execPath;
 
 /** 快捷启动器保存运行信息的目录 */
 const stateDirectory = path.join(homedir(), '.mock-studio');

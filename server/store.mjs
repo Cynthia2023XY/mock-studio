@@ -1,5 +1,6 @@
 import { StudioError } from './model.mjs';
-import { readFile, rename, writeFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { copyFile, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -9,11 +10,22 @@ const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
 /** Mock 注册表的持久化文件 */
 export const registryPath = process.env.MOCK_STUDIO_REGISTRY ?? path.resolve(moduleDirectory, '../data/registry.json');
 
+/** 首次运行时使用的空项目模板 */
+const emptyRegistryPath = path.resolve(moduleDirectory, '../desktop/empty-registry.json');
+
 /** 串行化写入队列，避免连续切换状态时覆盖数据 */
 let writeQueue = Promise.resolve();
 
 /** 读取当前完整 Mock 注册表 */
 export const readRegistry = async () => {
+  // 仅为默认路径初始化；显式指定的文件必须由调用方准备，避免掩盖路径错误。
+  if (!process.env.MOCK_STUDIO_REGISTRY) {
+    try {
+      await copyFile(emptyRegistryPath, registryPath, constants.COPYFILE_EXCL);
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+    }
+  }
   // 只在内存补齐集合，读取旧数据不会触发迁移或落盘。
   const registry = JSON.parse(await readFile(registryPath, 'utf8'));
   registry.schemaVersion ??= 1;

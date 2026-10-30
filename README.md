@@ -68,39 +68,52 @@ npm run mock -- migration-apply <项目ID> '<预览返回的fingerprint>' --json
 
 新版场景包 `version: 2` 同时包含 `mocks`、`combinations` 和兼容的 `endpoints/flow`；导入进行引用校验与编号映射，新规则和组合默认关闭，旧版 `version: 1` 包仍可导入。
 
-## 启动
+## 从源码启动（macOS）
+
+适合可以使用终端和 Git 的开发者。首次使用需要 Node.js、npm 和 Whistle；后续只需打开 Whistle、进入项目运行 `npm run dev`。当前尚未完成 Windows 和 Intel macOS 的新设备验收。
+
+### 首次安装
+
+1. 安装 Node.js 24（项目要求 Node.js >= 22.13.0）和 Git。执行 `node -v`、`npm -v` 确认终端可以找到它们。
+2. 下载 [Whistle 桌面客户端](https://github.com/avwo/whistle-client/releases)，将 `Whistle.app` 放入 `/Applications` 并打开。源码版默认从该路径调用客户端内置的 Whistle CLI；需要自定义路径时，可在启动前设置 `MOCK_STUDIO_WHISTLE_CLI` 为其 `bin/whistle.js` 的绝对路径。
+3. 确保账号有仓库访问权限，执行：
+
+   ```bash
+   git clone https://github.com/Cynthia2023XY/mock-studio.git
+   cd mock-studio
+   npm ci
+   npm run dev
+   ```
+
+4. 在浏览器打开 <http://127.0.0.1:3000/>。管理 API 使用 `127.0.0.1:17321`，Whistle 默认代理端口为 `8888`。源码版不会自动启动 Whistle；应先打开客户端，并确认控制台显示规则同步成功。
+
+首次启动从 `desktop/empty-registry.json` 创建空的 `data/registry.json`。该文件和迁移备份只保存在本地，重复启动不会覆盖。可以在项目菜单导入场景包，也可以自行创建项目和 Mock；首次使用不会自动获得其他人的配置。
+
+从曾经跟踪 `data/registry.json` 的旧版本升级前，请先将该文件复制到项目目录之外备份：Git 拉取删除跟踪文件的提交时可能移除旧文件。升级后可在服务停止时将备份恢复到 `data/registry.json`。停止跟踪只影响后续提交，旧 Git 历史中已有的数据仍然存在；公开或分享历史前应检查其内容。
+
+### 验证代理是否命中
+
+1. 在控制台新建项目，添加一条 `GET`、精确匹配 `http://mock-studio.test/api/check` 的 Mock，响应 JSON 填写 `{"ok":true}`，启用这条规则和项目总开关，并检查规则同步成功。
+2. 在本机另开终端执行（将 `8888` 改为 Whistle 实际端口）：
+
+   ```bash
+   curl -i --noproxy '' -x http://127.0.0.1:8888 http://mock-studio.test/api/check
+   ```
+
+   应看到 JSON 响应和 `x-mock-source` 响应头，控制台应出现命中记录。这是通过显式代理发送的 HTTP 测试；目标域名用于测试，不需要请求真实业务接口。
+3. 调试浏览器时，还要将浏览器或系统代理指向 Whistle，确认实际请求经过该代理。HTTPS 需要按 Whistle 指引安装并信任根证书、启用 HTTPS 解析；之后用目标 HTTPS 请求再次检查响应头和命中记录。手机需要能连接电脑的局域网地址及代理端口；浏览器命中不代表 App 一定使用该代理。
+4. 结束调试前，在控制台关闭项目或规则并确认同步成功，再在启动终端按 `Ctrl+C`。源码模式停止时不会自动清除 Whistle 托管规则；异常退出后请检查 Whistle 中的 `mock-studio-managed` 规则。
+
+### 常见问题
+
+- **端口占用**：执行 `lsof -nP -iTCP:3000 -iTCP:17321 -iTCP:8888 -sTCP:LISTEN`，确认占用进程后再决定如何处理。不要直接关闭不明进程。管理页面固定使用 3000，管理 API 默认使用 17321；端口被占用时请处理冲突后重试。
+- **页面打开但规则同步失败**：确认 Whistle 客户端正在运行、安装路径正确，并查看页面状态和启动终端日志；保存 Mock 成功不等于代理同步成功。
+- **规则已同步但请求未命中**：检查请求是否经过正确的代理、方法和完整 URL 是否匹配、项目和规则是否启用；HTTPS 再检查证书及 HTTPS 解析。页面角标可能受 CSP 等限制，优先检查响应头和命中记录。
+- **需要命令行管理**：在项目目录执行 `npm run mock -- list`。源码仓库不会自动安装全局 `mock-studio` 命令。
 
 ### macOS 桌面安装版
 
-当前安装版面向 Apple Silicon macOS，需先单独安装 [Whistle 桌面客户端](https://github.com/avwo/whistle-client/releases)，并放入「应用程序」目录。安装并打开 Mock Studio 后，它会尝试启动或复用 Whistle，并启动自己的本地服务。首次调试 HTTPS 时，请按 Whistle 指引配置代理、安装和信任根证书；如果使用浏览器专用代理，也需确认浏览器请求实际经过 Whistle。
-
-桌面版使用本机 `3000`、`17321` 端口；端口已占用时请先确认并停止冲突程序。Whistle 默认使用 `8888`，启动就绪及规则同步以应用显示的状态为准。桌面版将数据、令牌和日志保存在 `~/Library/Application Support/Mock Studio/`，初次安装为空项目；可通过项目菜单导入场景包。退出桌面版时会尝试清除其托管规则，不会退出用户自己的 Whistle。
-
-在开发环境构建 Apple Silicon 安装包：先安装 Node.js 24 和依赖，再运行 `npm run package:mac`，产物位于 `release/`。未签名和公证的开发包可能受到 macOS 安全提示，仅供受信任的内部测试；发布给其他人前需要准备签名、公证以及全新设备验证。Windows 和 Intel macOS 版本尚未适配验证。
-
-在任意目录使用全局命令启动，启动器会检查 Whistle、启动服务并打开管理页面：
-
-```bash
-mock-studio start
-mock-studio stop
-mock-studio restart
-mock-studio status
-mock-studio open
-mock-studio logs
-```
-
-需要以前台开发模式运行时，再进入项目执行：
-
-```bash
-cd /Users/dingxinyi.2/Documents/practice/mock-studio
-npm run dev
-```
-
-控制台地址：<http://127.0.0.1:3000/>
-
-本地管理 API：<http://127.0.0.1:17321/>
-
-项目已固定使用 Codex 内置 Node 24 运行时，不会修改全局 Node 版本。
+桌面安装版当前面向 Apple Silicon，仍需单独安装 Whistle。应用数据保存在 `~/Library/Application Support/Mock Studio/`，与源码版独立。在开发环境安装 Node.js 24 和依赖后，可运行 `npm run package:mac`，产物位于 `release/`。未签名、公证的开发包可能受到 macOS 安全提示；向他人发布前需要签名、公证及全新设备验证。
 
 ## 已实现能力
 
@@ -147,7 +160,8 @@ CLI 与页面都调用同一个本地管理 API，因此变更会立刻互相可
 
 ## 数据与规则
 
-- 项目、接口及响应数据：`data/registry.json`
+- 项目、接口及响应数据：`data/registry.json`（首次运行时创建，不提交到 Git）
+- 空注册表模板：`desktop/empty-registry.json`
 - 自动生成的 Whistle 配置：`data/generated/mock-studio.whistle.js`
 - Mock 管理与响应服务：`server/index.mjs`
 - CLI：`bin/mockctl.mjs`

@@ -1,2 +1,2 @@
 #!/bin/zsh
-exec /Users/dingxinyi.2/.local/bin/mock-studio start
+exec node "${0:A:h}/../bin/mock-studio-launcher.mjs" start

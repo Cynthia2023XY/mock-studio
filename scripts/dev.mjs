@@ -1,20 +1,32 @@
 import { spawn } from 'node:child_process';
+import net from 'node:net';
+import { readRegistry } from '../server/store.mjs';
 
-/** 项目要求的 Node 24 可执行文件目录 */
-const runtimeBin = '/Users/dingxinyi.2/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin';
+/** 启动前检查固定端口，避免页面失败后仍修改 Whistle 规则 */
+const checkPort = (port) => new Promise((resolve, reject) => {
+  // 监听失败时报告冲突；真正启动仍需处理端口竞争。
+  const probe = net.createServer();
+  probe.once('error', (error) => reject(new Error(`无法监听 127.0.0.1:${port}：${error.message}`)));
+  probe.listen(port, '127.0.0.1', () => probe.close(resolve));
+});
 
-/** 子进程统一使用的运行环境 */
-const childEnvironment = { ...process.env, PATH: `${runtimeBin}:${process.env.PATH ?? ''}` };
+/** 注册表中的本地服务配置 */
+const registry = await readRegistry();
+try {
+  await checkPort(3000);
+  await checkPort(registry.settings.apiPort);
+} catch (error) {
+  console.error(`[Mock Studio] 启动失败：${error.message}`);
+  process.exit(1);
+}
 
 /** 本地 Mock API 服务进程 */
 const apiProcess = spawn(process.execPath, ['server/index.mjs'], {
-  env: childEnvironment,
   stdio: 'inherit',
 });
 
 /** 可视化前端开发服务进程 */
 const webProcess = spawn(process.execPath, ['node_modules/vinext/dist/cli.js', 'dev', '--host', '127.0.0.1'], {
-  env: childEnvironment,
   stdio: 'inherit',
 });
 
