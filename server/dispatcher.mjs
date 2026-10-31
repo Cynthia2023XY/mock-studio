@@ -1,3 +1,4 @@
+import { handleCaptureRuntime } from './capture-runtime.mjs';
 import { resolveCors, mergeCorsHeaders } from './cors.mjs';
 import { trackDelivery } from './delivery.mjs';
 import http from 'node:http';
@@ -96,6 +97,7 @@ export const handleDispatch = async (request, response, sendMockJson) => {
   // Whistle 对完整原始 URL 编码，避免引号破坏请求头 JSON。
   let url;
   try { url = normalizeUrl(decodeURIComponent(String(request.headers['x-mock-original-url'] ?? ''))); } catch { throw new StudioError('INVALID_ORIGINAL_URL', '代理原始地址无效'); }
+  if (await handleCaptureRuntime(request, response, url)) return;
   // 跨域判定与业务选择使用同一个事务快照，设置变更不能穿插其中。
   const { cors, selection } = await mutateRegistry((registry) => {
     const cors = resolveCors(registry, request, url);

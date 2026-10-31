@@ -1,3 +1,4 @@
+import { handleCaptureApi } from './capture-api.mjs';
 import { resolveCors, mergeCorsHeaders } from './cors.mjs';
 import { trackDelivery } from './delivery.mjs';
 import { handleV2Api } from './v2-api.mjs';
@@ -166,6 +167,7 @@ const handleRequest = async (request, response) => {
   if (pathname === '/runtime/dispatch') return handleDispatch(request, response, sendMockJson);
   // 管理预检先返回，避免被资源变更路由误当成配置操作。
   if (request.method === 'OPTIONS') return sendJson(response, 204, null);
+  if (await handleCaptureApi(request, response, pathname, { readJsonBody, sendJson, syncAndRecord })) return;
   if (await handleV2Api(request, response, pathname, { readJsonBody, sendJson, syncAndRecord })) return;
   // 迁移后旧 CLI 明确报错，避免无效操作被显示为成功。
   if (pathname.startsWith('/api/endpoints/')) {
@@ -536,6 +538,8 @@ const server = http.createServer((request, response) => {
 
 /** 启动服务时读取的监听端口 */
 const registry = await readRegistry();
+// 重启后录制自动停止，防止无意继续采集；已录制内容保留。
+if (registry.projects.some((project) => project.recordings?.some((item) => item.status === 'recording' || item.pending))) await mutateRegistry((next) => { for (const project of next.projects) for (const session of project.recordings ?? []) { session.status = 'stopped'; session.pending = 0; } });
 
 server.listen(registry.settings.apiPort, host, async () => {
   /** 初次启动时的 Whistle 同步结果 */

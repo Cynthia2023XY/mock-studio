@@ -1,6 +1,7 @@
 'use client';
 
 import { apiRequest } from '@/lib/management-api';
+import { CaptureWorkspace, type Recording, type Resource } from '@/components/capture-workspace';
 import { MockWorkspace } from '@/components/mock-workspace';
 import type { SingleMock, Combination } from '@/components/mock-workspace';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -25,7 +26,7 @@ type EndpointStats = { hits: number; lastHitAt: string | null };
 /** 可管理 Mock 接口的数据结构 */
 type MockEndpoint = { id: string; name: string; method: string; url: string; matchType: string; enabled: boolean; mode: 'fixed' | 'sequence' | 'state'; activeVariantId: string; delayMs: number; sequence: { currentIndex: number; afterEnd: 'hold-last' | 'loop' }; stats: EndpointStats; variants: MockVariant[]; stateVariants?: Record<string, string> };
 /** 项目分组的数据结构 */
-type MockProject = { id: string; revision?: string; cors?: { mode: 'manual' | 'allow-list'; origins?: string[]; headers?: string[]; credentials?: boolean }; name: string; description: string; enabled: boolean; pageUrl?: string; endpoints: MockEndpoint[]; mocks?: SingleMock[]; combinations?: Combination[]; flow?: { states: string[]; initialState: string; currentState: string; transitions: { from: string; to: string; endpointId: string; variantId: string }[] } };
+type MockProject = { recordings?: Recording[]; resources?: Resource[]; id: string; revision?: string; cors?: { mode: 'manual' | 'allow-list'; origins?: string[]; headers?: string[]; credentials?: boolean }; name: string; description: string; enabled: boolean; pageUrl?: string; endpoints: MockEndpoint[]; mocks?: SingleMock[]; combinations?: Combination[]; flow?: { states: string[]; initialState: string; currentState: string; transitions: { from: string; to: string; endpointId: string; variantId: string }[] } };
 /** Whistle 同步状态 */
 type WhistleStatus = { ok: boolean; verified?: boolean; desiredDigest?: string; verifiedDigest?: string; checkedAt?: string; lastSuccessAt?: string; ruleCount: number; message: string; syncedAt: string | null };
 /** 完整 Mock Studio 注册表 */
@@ -60,6 +61,8 @@ export default function Home() {
   const [newProjectName, setNewProjectName] = useState('');
   /** 当前选中的项目编号 */
   const [activeProjectId, setActiveProjectId] = useState('gold-bean');
+  /** 当前项目功能面板 */
+  const [workspaceTab, setWorkspaceTab] = useState<'mocks' | 'recordings' | 'resources'>('mocks');
   /** 接口名称与地址搜索关键词 */
   const [searchText, setSearchText] = useState('');
   /** 场景编辑抽屉的选中目标 */
@@ -132,7 +135,7 @@ export default function Home() {
   /** 当前选中的项目 */
   const activeProject = useMemo(() => registry?.projects.find((project) => project.id === activeProjectId) ?? registry?.projects[0] ?? null, [activeProjectId, registry]);
   // 统计包含组合接管的实际启用范围，项目关闭时显示零。
-  const activeMockCount = activeProject?.enabled ? new Set([...(activeProject.mocks ?? []).filter((item) => item.enabled).map((item) => item.id), ...(activeProject.combinations ?? []).filter((item) => item.enabled).flatMap((item) => item.steps.map((step) => step.mockId))]).size + activeProject.endpoints.filter((item) => item.enabled).length : 0;
+  const activeMockCount = activeProject?.enabled ? (activeProject.recordings ?? []).filter((item) => item.status === 'recording' || item.enabled).length + (activeProject.resources ?? []).filter((item) => item.enabled).length + new Set([...(activeProject.mocks ?? []).filter((item) => item.enabled).map((item) => item.id), ...(activeProject.combinations ?? []).filter((item) => item.enabled).flatMap((item) => item.steps.map((step) => step.mockId))]).size + activeProject.endpoints.filter((item) => item.enabled).length : 0;
   const status = registry ? projectStatus({ connected, enabled: activeProject?.enabled ?? false, count: activeMockCount, pending: saving || workspaceGuard.busy, whistle: registry.runtime.whistle }) : { tone: 'neutral', label: '正在连接本地服务', hint: '正在读取项目配置。' };
   const proxyVerified = projectStatus({ connected, enabled: true, count: 1, pending: false, whistle: registry?.runtime.whistle }).tone === 'success';
   /** 当前项目最近一次导入所保存的恢复快照 */
@@ -432,8 +435,10 @@ export default function Home() {
 
         <div className="workspace-card overflow-hidden rounded-2xl border border-border bg-card shadow-2xl shadow-black/20">
           <div className="flex flex-col gap-4 border-b border-border px-5 py-4 sm:flex-row sm:items-center sm:justify-between"><div className="flex items-center gap-3"><Switch aria-label="项目总开关" checked={activeProject?.enabled ?? false} disabled={!activeProject || saving} onCheckedChange={(checked) => activeProject && void patchProject(activeProject.id, checked)} className="data-checked:bg-violet-500" /><div><p className="text-sm font-medium">项目总开关</p><p className="text-xs text-muted-foreground">关闭后所有接口直接访问线上服务</p></div></div><div className="flex items-center gap-2 text-xs text-muted-foreground"><span className={`size-2 rounded-full ${connected ? 'animate-pulse bg-emerald-400' : 'bg-rose-400'}`} />{feedback}</div></div>
-          {activeProject && <div className="p-5"><MockWorkspace key={activeProject.id} project={activeProject} proxyReady={status.tone === 'success'} search={searchText} hits={hits} request={apiRequest} refresh={() => loadRegistry(true)} notify={setFeedback} onGuardChange={setWorkspaceGuard} /></div>}
-          {Boolean(activeProject?.endpoints.length) && <><div className="px-5 pb-3 text-sm text-muted-foreground">旧版接口 / 流程 · 保留原有固定、顺序及共享状态行为</div><div className="overflow-x-auto">
+          {activeProject && <div className="flex gap-2 border-b border-border px-5 py-3" role="tablist" aria-label="项目功能">{([['mocks', 'Mock 规则'], ['recordings', '接口录制'], ['resources', '资源替换']] as const).map(([key, label]) => <Button role="tab" aria-selected={workspaceTab === key} key={key} variant={workspaceTab === key ? 'secondary' : 'ghost'} onClick={() => { if (workspaceGuard.busy || (workspaceGuard.dirty && !window.confirm('有未保存的修改，确定放弃吗？'))) return; setWorkspaceGuard({ dirty: false, busy: false }); setWorkspaceTab(key); }}>{label}</Button>)}</div>}
+          {activeProject && workspaceTab !== 'mocks' && <div className="p-5"><CaptureWorkspace key={`${activeProject.id}-${workspaceTab}`} project={activeProject} mode={workspaceTab} proxyReady={proxyVerified} request={apiRequest} refresh={() => loadRegistry(true)} notify={setFeedback} onGuardChange={setWorkspaceGuard} /></div>}
+          {activeProject && workspaceTab === 'mocks' && <div className="p-5"><MockWorkspace key={activeProject.id} project={activeProject} proxyReady={status.tone === 'success'} search={searchText} hits={hits} request={apiRequest} refresh={() => loadRegistry(true)} notify={setFeedback} onGuardChange={setWorkspaceGuard} /></div>}
+          {workspaceTab === 'mocks' && Boolean(activeProject?.endpoints.length) && <><div className="px-5 pb-3 text-sm text-muted-foreground">旧版接口 / 流程 · 保留原有固定、顺序及共享状态行为</div><div className="overflow-x-auto">
             <table className="w-full min-w-[1180px] border-collapse text-left"><thead className="bg-muted text-[11px] uppercase tracking-[0.12em] text-muted-foreground"><tr><th className="w-16 px-5 py-3.5">状态</th><th className="px-4 py-3.5">接口</th><th className="px-4 py-3.5">请求</th><th className="px-4 py-3.5">响应策略</th><th className="px-4 py-3.5">当前场景</th><th className="px-4 py-3.5">延迟</th><th className="px-4 py-3.5">命中</th><th className="px-5 py-3.5 text-right">操作</th></tr></thead>
               <tbody>{visibleEndpoints.map((endpoint) => {
                 /** 固定模式当前选择的响应场景 */

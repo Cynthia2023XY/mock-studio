@@ -1,3 +1,4 @@
+import { validateCaptureTools } from './capture-model.mjs';
 import { validateCombinations, makeMock } from './rules.mjs';
 import { randomUUID, createHash } from 'node:crypto';
 import { validateHeaderName, validateHeaderValue } from 'node:http';
@@ -124,6 +125,7 @@ export const validateProject = (project) => {
   }
   validateFlow(project);
   validateCombinations(project);
+  validateCaptureTools(project);
   return project;
 };
 
@@ -146,7 +148,7 @@ export const selectRuntime = (project, endpoint) => {
 /** 将场景包转成独立项目配置，所有响应数据都必须已内联 */
 export const preparePackage = (pack, projectId) => {
   if (!pack || ![1, 2].includes(pack.version) || (pack.version === 1 && !Array.isArray(pack.endpoints))) throw new StudioError('INVALID_PACKAGE', '场景包版本或接口列表无效');
-  if (![pack.endpoints ?? [], pack.mocks ?? [], pack.combinations ?? []].every(Array.isArray) || (pack.version === 1 && ((pack.mocks?.length ?? 0) || (pack.combinations?.length ?? 0)))) throw new StudioError('INVALID_PACKAGE', '场景包集合无效或版本不兼容');
+  if (![pack.endpoints ?? [], pack.mocks ?? [], pack.combinations ?? [], pack.resources ?? [], pack.recordings ?? []].every(Array.isArray) || (pack.version === 1 && ((pack.mocks?.length ?? 0) || (pack.combinations?.length ?? 0)))) throw new StudioError('INVALID_PACKAGE', '场景包集合无效或版本不兼容');
   // 批量导入默认关闭，激活由调用者显式决定。
   const project = { id: projectId, name: pack.name || '导入的场景包', description: pack.description || '导入的本地 Mock 项目', pageUrl: pack.pageUrl || '', cors: pack.cors, enabled: false, updatedAt: new Date().toISOString(), endpoints: [] };
   for (const input of pack.endpoints ?? []) {
@@ -170,6 +172,8 @@ export const preparePackage = (pack, projectId) => {
     if (!item || typeof item !== 'object') throw new StudioError('INVALID_PACKAGE', '组合配置必须为对象');
     return { ...item, enabled: false, currentIndex: 0 };
   });
+  project.resources = (pack.resources ?? []).map((item) => ({ ...item, enabled: false, hits: 0 }));
+  project.recordings = (pack.recordings ?? []).map((item) => ({ ...item, status: 'stopped', enabled: false, pending: 0, positions: {} }));
   if (pack.flow) project.flow = { ...pack.flow, currentState: pack.flow.initialState };
   return validateProject(project);
 };
@@ -189,6 +193,8 @@ export const projectFingerprint = (project) => {
   }
   for (const mock of copy.mocks ?? []) { delete mock.stats; delete mock.updatedAt; }
   for (const combination of copy.combinations ?? []) delete combination.currentIndex;
+  for (const resource of copy.resources ?? []) { delete resource.hits; delete resource.lastHitAt; }
+  for (const recording of copy.recordings ?? []) { delete recording.positions; delete recording.pending; delete recording.skipped; delete recording.nextOrder; if (recording.status === 'recording') delete recording.entries; }
   return JSON.stringify(copy);
 };
 

@@ -56,7 +56,7 @@ export const compileWhistleRules = (registry, runtimeKey = proxyKey) => {
   // 旧接口继续使用原来的前缀范围，新规则明确区分完整匹配与包含匹配。
   const rules = entries.map((entry) => {
     // 所有规则共享统一元数据和运行入口。
-    const matcher = entry.match.type === 'legacy' ? escapeRuleValue(entry.match.value) : entry.match.type === 'exact' ? `/^${literal(normalizeUrl(entry.match.value))}$/` : `/^(?=https?:\\/\\/).*${literal(entry.match.value)}/`;
+    const matcher = entry.match.type === 'legacy' ? escapeRuleValue(entry.match.value) : entry.match.type === 'prefix' ? `/^${literal(entry.match.value)}/` : entry.match.type === 'path' ? `/^${literal(new URL(entry.match.value).origin + new URL(entry.match.value).pathname)}(?:\\?.*)?$/` : entry.match.type === 'exact' ? `/^${literal(normalizeUrl(entry.match.value))}$/` : `/^(?=https?:\\/\\/).*${literal(entry.match.value)}/`;
     const forward = `${matcher} http://127.0.0.1:${registry.settings.apiPort}/runtime/dispatch ${metadata}`;
     const autoCors = entry.autoCors;
     return [`${forward} includeFilter://m:${entry.method}`, ...(autoCors && entry.method !== 'OPTIONS' ? [`${forward} includeFilter://m:OPTIONS`] : [])].join('\n');

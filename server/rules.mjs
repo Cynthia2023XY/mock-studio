@@ -1,3 +1,4 @@
+import { captureRules, validateCaptureTools, interfaceKey } from './capture-model.mjs';
 import { StudioError, checkId, newId, validateVariant } from './model.mjs';
 
 /** 将请求地址规范化，保留路径大小写、百分号编码及查询参数顺序 */
@@ -64,18 +65,21 @@ export const activeRules = (project) => {
   if (!project.enabled) return [];
   // 被组合引用的 Mock 不受自身开关影响。
   const controlled = new Set((project.combinations ?? []).filter((item) => item.enabled).flatMap((item) => item.steps.map((step) => step.mockId)));
-  return [...(project.mocks ?? []).filter((mock) => mock.enabled || controlled.has(mock.id)), ...(project.endpoints ?? []).filter((endpoint) => endpoint.enabled).map((endpoint) => ({ ...endpoint, match: { type: 'legacy', value: endpoint.url } }))];
+  return [...captureRules(project), ...(project.mocks ?? []).filter((mock) => mock.enabled || controlled.has(mock.id)), ...(project.endpoints ?? []).filter((endpoint) => endpoint.enabled).map((endpoint) => ({ ...endpoint, match: { type: 'legacy', value: endpoint.url } }))];
 };
 
 /** 按明确的大小写和编码语义检查完整地址与请求方法 */
-export const matchesRequest = (mock, url, method) => mock.method === method && (mock.match.type === 'exact' ? normalizeUrl(mock.match.value) === url : mock.match.type === 'contains' ? url.includes(mock.match.value) : url.startsWith(mock.match.value));
+export const matchesRequest = (mock, url, method) => mock.method === method && (mock.match.type === 'exact' ? normalizeUrl(mock.match.value) === url : mock.match.type === 'path' ? interfaceKey(method, mock.match.value) === interfaceKey(method, url) : mock.match.type === 'contains' ? url.includes(mock.match.value) : url.startsWith(mock.match.value));
 
 /** 判定跨项目规则可能重叠，模糊规则相互重叠时保守拒绝 */
 export const rulesOverlap = (left, right) => {
   if (left.method !== right.method) return false;
+  if (left.match.type === 'path' && right.match.type === 'path') return interfaceKey(left.method, left.match.value) === interfaceKey(right.method, right.match.value);
+  if (left.match.type === 'path' && ['prefix', 'legacy'].includes(right.match.type)) return left.match.value.startsWith(right.match.value) || right.match.value.startsWith(left.match.value + '?');
+  if (right.match.type === 'path' && ['prefix', 'legacy'].includes(left.match.type)) return rulesOverlap(right, left);
   if (left.match.type === 'exact') return matchesRequest(right, normalizeUrl(left.match.value), left.method);
   if (right.match.type === 'exact') return matchesRequest(left, normalizeUrl(right.match.value), right.method);
-  if (left.match.type === 'legacy' && right.match.type === 'legacy') return left.match.value.startsWith(right.match.value) || right.match.value.startsWith(left.match.value);
+  if (['legacy', 'prefix'].includes(left.match.type) && ['legacy', 'prefix'].includes(right.match.type)) return left.match.value.startsWith(right.match.value) || right.match.value.startsWith(left.match.value);
   // 两个包含条件可能出现在同一 URL 中；不依赖样本猜测互斥。
   return true;
 };
@@ -83,8 +87,13 @@ export const rulesOverlap = (left, right) => {
 /** 在启用或修改规则时阻止跨项目竞争，同时保持旧接口重复检查 */
 export const checkConflicts = (registry, candidate) => {
   validateCombinations(candidate);
+  validateCaptureTools(candidate);
   // 候选项目未开启时不会接管请求。
   const rules = activeRules(candidate);
+  const tools = candidate.enabled ? captureRules(candidate) : [];
+  for (let index = 0; index < tools.length; index++) {
+    for (const right of [...tools.slice(index + 1), ...rules.slice(tools.length)]) if (rulesOverlap(tools[index], right)) throw new StudioError('RULE_CONFLICT', '录制、回放或资源替换与已启用规则重叠，请先关闭重叠规则', 409);
+  }
   for (const other of registry.projects.filter((item) => item.id !== candidate.id)) {
     for (const left of rules) for (const right of activeRules(other)) {
       if (rulesOverlap(left, right)) throw new StudioError('RULE_CONFLICT', `项目「${candidate.name}」的「${left.name}」与「${other.name} / ${right.name}」匹配范围重叠`, 409);
