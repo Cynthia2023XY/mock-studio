@@ -1,7 +1,9 @@
+import { resolveCors, mergeCorsHeaders } from './cors.mjs';
+import { trackDelivery } from './delivery.mjs';
 import http from 'node:http';
 import https from 'node:https';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { mutateRegistry } from './store.mjs';
+import { mutateRegistry, withoutWrite } from './store.mjs';
 import { newId, selectRuntime, StudioError } from './model.mjs';
 import { matchesRequest, normalizeUrl } from './rules.mjs';
 
@@ -54,7 +56,7 @@ const recordSelection = (registry, project, mock, variant, url, method, detail =
   mock.stats.hits += 1;
   mock.stats.lastHitAt = new Date().toISOString();
   // 详情保留配置匹配值，同时单独记录实际地址。
-  const hit = { id: newId('hit'), timestamp: mock.stats.lastHitAt, projectId: project.id, mockId: mock.id, method, configuredUrl: mock.match?.value ?? mock.url, actualUrl: url, variantName: mock.name, outcome: 'mock', status: variant.status, delayMs: variant.delayMs, ...detail };
+  const hit = { id: newId('hit'), timestamp: mock.stats.lastHitAt, projectId: project.id, mockId: mock.id, method, configuredUrl: mock.match?.value ?? mock.url, actualUrl: url, variantName: mock.name, outcome: 'mock', delivery: 'selected', status: variant.status, delayMs: variant.delayMs, ...detail };
   registry.hits = [...(registry.hits ?? []), hit].slice(-500);
   return { project, mock, variant, hit };
 };
@@ -85,7 +87,7 @@ const passthrough = (request, response, url) => {
 };
 
 /** 验证代理凭据后分发原始请求，普通客户端不能伪造分发信息 */
-export const handleDispatch = async (request, response, sendJson) => {
+export const handleDispatch = async (request, response, sendMockJson) => {
   // 使用固定长度比较，不接受由 URL 查询串提供的元数据。
   const provided = Buffer.from(String(request.headers['x-mock-proxy-key'] ?? ''));
   // 按字节长度比较，避免非 ASCII 伪造头触发比较器异常。
@@ -94,13 +96,25 @@ export const handleDispatch = async (request, response, sendJson) => {
   // Whistle 对完整原始 URL 编码，避免引号破坏请求头 JSON。
   let url;
   try { url = normalizeUrl(decodeURIComponent(String(request.headers['x-mock-original-url'] ?? ''))); } catch { throw new StudioError('INVALID_ORIGINAL_URL', '代理原始地址无效'); }
-  // 选择、推进和记录必须在单次队列事务完成，响应延迟在事务外执行。
-  const selection = await mutateRegistry((registry) => dispatchSelection(registry, url, request.method));
+  // 跨域判定与业务选择使用同一个事务快照，设置变更不能穿插其中。
+  const { cors, selection } = await mutateRegistry((registry) => {
+    const cors = resolveCors(registry, request, url);
+    if (cors.denied || cors.preflight) return withoutWrite({ cors });
+    const selection = dispatchSelection(registry, url, request.method);
+    return selection ? { cors, selection } : withoutWrite({ cors, selection });
+  });
+  if (cors.denied) { request.resume(); return sendMockJson(response, 403, { code: 'CORS_DENIED', message: '页面来源或请求头不在允许列表内' }, cors.headers); }
+  if (cors.preflight) { request.resume(); return sendMockJson(response, 204, null, cors.headers); }
+  // 响应延迟与回源在事务外执行，不阻塞后续请求的状态选择。
   if (!selection) return passthrough(request, response, url);
   request.resume();
-  if (selection.error) return sendJson(response, 409, selection.error, { 'x-mock-outcome': 'order-mismatch', 'cache-control': 'no-store' });
+  if (selection.error) return sendMockJson(response, 409, selection.error, { ...cors.headers, 'x-mock-outcome': 'order-mismatch', 'cache-control': 'no-store' });
   // 客户端自定义跨域头可以保留，内部标记最后写入。
   const { variant, mock, project, hit } = selection;
+  const failDelivery = trackDelivery(response, hit.id);
   if (variant.delayMs) await new Promise((resolve) => setTimeout(resolve, variant.delayMs));
-  sendJson(response, variant.status, variant.body, { ...variant.headers, 'access-control-expose-headers': [...new Set(['x-mock-source', 'x-mock-project', 'x-mock-endpoint', 'x-mock-variant', 'x-mock-sequence', 'x-mock-hit-id', ...String(variant.headers['access-control-expose-headers'] ?? '').split(',').map((name) => name.trim()).filter(Boolean)])].join(', '), 'cache-control': 'no-store', 'x-mock-source': 'mock-studio', 'x-mock-project': encodeURIComponent(project.name), 'x-mock-endpoint': encodeURIComponent(mock.name), 'x-mock-variant': encodeURIComponent(hit.variantName), 'x-mock-hit-id': hit.id, 'x-mock-sequence': `${(hit.sequenceIndex ?? 0) + 1}/${hit.sequenceTotal ?? 1}` });
+  if (response.destroyed) return;
+  try {
+    sendMockJson(response, variant.status, variant.body, { ...mergeCorsHeaders(variant.headers, cors), 'access-control-expose-headers': [...new Set(['x-mock-source', 'x-mock-project', 'x-mock-endpoint', 'x-mock-variant', 'x-mock-sequence', 'x-mock-hit-id', ...String(variant.headers['access-control-expose-headers'] ?? '').split(',').map((name) => name.trim()).filter(Boolean)])].join(', '), 'cache-control': 'no-store', 'x-mock-source': 'mock-studio', 'x-mock-project': encodeURIComponent(project.name), 'x-mock-endpoint': encodeURIComponent(mock.name), 'x-mock-variant': encodeURIComponent(hit.variantName), 'x-mock-hit-id': hit.id, 'x-mock-sequence': `${(hit.sequenceIndex ?? 0) + 1}/${hit.sequenceTotal ?? 1}` });
+  } catch (error) { failDelivery(); throw error; }
 };

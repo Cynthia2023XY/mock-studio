@@ -9,6 +9,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export default defineConfig({
   root: path.join(root, 'desktop'),
   base: '/',
+  publicDir: path.join(root, 'public'),
   plugins: [react()],
   css: { postcss: { plugins: [tailwindcss()] } },
   resolve: { alias: { '@': root } },

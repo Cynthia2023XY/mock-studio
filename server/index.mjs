@@ -1,3 +1,5 @@
+import { resolveCors, mergeCorsHeaders } from './cors.mjs';
+import { trackDelivery } from './delivery.mjs';
 import { handleV2Api } from './v2-api.mjs';
 import { checkConflicts } from './rules.mjs';
 import { handleDispatch } from './dispatcher.mjs';
@@ -6,8 +8,8 @@ import { createHash, randomBytes } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { findEndpoint, getNextSequenceIndex, mutateRegistry, readRegistry } from './store.mjs';
-import { syncWhistleRules } from './whistle.mjs';
+import { findEndpoint, getNextSequenceIndex, mutateRegistry, readRegistry, withRevision, withoutWrite } from './store.mjs';
+import { syncWhistleRules, compileWhistleRules } from './whistle.mjs';
 import { makeEndpoint, newId, preparePackage, projectFingerprint, selectRuntime, StudioError, validateEndpoint, validateProject, validateVariant } from './model.mjs';
 
 /** 本地 API 监听地址 */
@@ -27,18 +29,19 @@ const managementToken = await (async () => {
   }
 })();
 
-/** 向客户端发送 JSON 响应 */
-const sendJson = (response, statusCode, body, extraHeaders = {}) => {
+/** 发送 JSON，不改写业务 Mock 配置的响应体 */
+const sendMockJson = (response, statusCode, body, extraHeaders = {}) => {
   response.writeHead(statusCode, {
-    'access-control-allow-origin': '*',
-    'access-control-allow-methods': 'GET,POST,PATCH,PUT,DELETE,HEAD,OPTIONS',
-    'access-control-allow-headers': 'content-type, x-mock-token',
     'content-type': 'application/json; charset=utf-8',
     ...extraHeaders,
   });
-  // 所有失败响应保留可供 CLI 和 AI 识别的稳定错误码。
+  response.end(JSON.stringify(body));
+};
+
+/** 管理及分发诊断错误保留稳定错误码，业务响应不使用该封装 */
+const sendJson = (response, statusCode, body, extraHeaders = {}) => {
   const payload = statusCode >= 400 && body && typeof body === 'object' && !body.code ? { ...body, code: `HTTP_${statusCode}` } : body;
-  response.end(JSON.stringify(payload));
+  sendMockJson(response, statusCode, payload, { 'access-control-allow-origin': '*', 'access-control-allow-methods': 'GET,POST,PATCH,PUT,DELETE,HEAD,OPTIONS', 'access-control-allow-headers': 'content-type, x-mock-token, if-match', ...extraHeaders });
 };
 
 /** 读取并解析请求 JSON，空请求体按空对象处理 */
@@ -59,19 +62,43 @@ const getPathPart = (pathname, index) => pathname.split('/').filter(Boolean)[ind
 /** 按调用顺序串行同步代理规则，避免旧配置覆盖新配置 */
 let syncQueue = Promise.resolve();
 
-/** 触发规则同步并把结果写入注册表运行状态 */
-const syncAndRecord = async () => {
+/** 将尚未开始的同步合并；调用方等待包含本次变更的最新一轮结果 */
+let pendingSync = null;
+let syncActive = false;
+const syncAndRecord = (options = {}) => {
+  if (pendingSync) {
+    pendingSync.options.force ||= Boolean(options.force);
+    pendingSync.options.verify ||= Boolean(options.verify);
+    return pendingSync.promise;
+  }
+  const batch = { options: { ...options }, promise: null };
+  pendingSync = batch;
   syncQueue = syncQueue.catch(() => {}).then(async () => {
-    // 每次同步都读取队列执行时的最新配置。
-    const registry = await readRegistry();
-    // 记录文件生成与 Whistle 接收规则的结果。
-    const result = await syncWhistleRules(registry).catch((error) => ({ ok: false, message: `配置已保存，Whistle 同步失败：${error.message}`, ruleCount: 0 }));
-    await mutateRegistry((nextRegistry) => {
-      nextRegistry.runtime.whistle = { ...result, syncedAt: new Date().toISOString() };
-    });
-    return result;
+    pendingSync = null;
+    syncActive = true;
+    try {
+      const registry = await readRegistry();
+      const result = await syncWhistleRules(registry, batch.options).catch((error) => ({ ok: false, verified: false, checkedAt: new Date().toISOString(), message: `配置已保存，Whistle 同步失败：${error.message}`, ruleCount: 0 }));
+      await mutateRegistry((nextRegistry) => {
+        const previous = nextRegistry.runtime.whistle;
+        const desiredDigest = result.digest ? createHash('sha256').update(compileWhistleRules(nextRegistry)).digest('hex') : null;
+        const current = !result.digest || result.digest === desiredDigest;
+        nextRegistry.runtime.whistle = {
+          ...result,
+          ok: result.ok && current,
+          verified: Boolean(result.verified && current),
+          desiredDigest,
+          verifiedDigest: result.ok ? result.digest ?? null : previous?.verifiedDigest ?? null,
+          message: current ? result.message : '配置已更新，等待下一轮代理同步',
+          syncedAt: result.skipped ? previous?.syncedAt ?? null : new Date().toISOString(),
+          lastSuccessAt: result.ok ? result.checkedAt ?? new Date().toISOString() : previous?.lastSuccessAt ?? null,
+        };
+      });
+      return result;
+    } finally { syncActive = false; }
   });
-  return syncQueue;
+  batch.promise = syncQueue;
+  return batch.promise;
 };
 
 /** 防止两个启用规则同时匹配同一完整地址与方法 */
@@ -83,7 +110,9 @@ const handleRuntimeResponse = async (endpointId, request, response) => {
   const selection = await mutateRegistry((registry) => {
     /** 接口及所属项目定位结果 */
     const match = findEndpoint(registry, endpointId);
-    if (!match || !match.project.enabled || !match.endpoint.enabled) return null;
+    if (!match || !match.project.enabled || !match.endpoint.enabled) return withoutWrite(null);
+    const cors = resolveCors(registry, { method: match.endpoint.method, headers: request.headers }, match.endpoint.url);
+    if (cors.denied) return withoutWrite({ denied: true, cors });
     /** 本次应使用的场景 */
     const selected = selectRuntime(match.project, match.endpoint);
     /** 响应发出前的顺序位置 */
@@ -91,19 +120,23 @@ const handleRuntimeResponse = async (endpointId, request, response) => {
     match.endpoint.stats.hits += 1;
     match.endpoint.stats.lastHitAt = new Date().toISOString();
     // 命中记录不保存请求体、Cookie 或认证信息。
-    const hit = { id: newId('hit'), timestamp: match.endpoint.stats.lastHitAt, projectId: match.project.id, endpointId, method: request.method, configuredUrl: match.endpoint.url, variantId: selected.variant.id, variantName: selected.variant.name, status: selected.variant.status, delayMs: selected.variant.delayMs, sequenceIndex, stateBefore: selected.stateBefore, stateAfter: selected.stateAfter };
+    const hit = { id: newId('hit'), delivery: 'selected', timestamp: match.endpoint.stats.lastHitAt, projectId: match.project.id, endpointId, method: request.method, configuredUrl: match.endpoint.url, variantId: selected.variant.id, variantName: selected.variant.name, status: selected.variant.status, delayMs: selected.variant.delayMs, sequenceIndex, stateBefore: selected.stateBefore, stateAfter: selected.stateAfter };
     registry.hits = [...(registry.hits ?? []), hit].slice(-500);
-    return { endpoint: match.endpoint, project: match.project, variant: selected.variant, sequenceIndex, hitId: hit.id };
+    return { endpoint: match.endpoint, project: match.project, variant: selected.variant, sequenceIndex, hitId: hit.id, cors };
   });
   if (!selection) {
     sendJson(response, 404, { success: false, message: 'Mock 接口未启用或不存在' });
     return;
   }
+  if (selection.denied) return sendMockJson(response, 403, { code: 'CORS_DENIED', message: '页面来源不在允许列表内' }, selection.cors.headers);
   /** 响应场景配置的延迟时间 */
   const delayMs = Math.max(0, Number(selection.variant.delayMs ?? selection.endpoint.delayMs ?? 0));
+  const failDelivery = trackDelivery(response, selection.hitId);
   if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
-  sendJson(response, selection.variant.status, selection.variant.body, {
-    ...selection.variant.headers,
+  if (response.destroyed) return;
+  try {
+    sendMockJson(response, selection.variant.status, selection.variant.body, {
+    ...mergeCorsHeaders(selection.variant.headers, selection.cors),
     'access-control-expose-headers': 'x-mock-source, x-mock-project, x-mock-endpoint, x-mock-variant, x-mock-sequence, x-mock-hit-id',
     'x-mock-source': 'mock-studio',
     'x-mock-project': encodeURIComponent(selection.project.name),
@@ -112,6 +145,7 @@ const handleRuntimeResponse = async (endpointId, request, response) => {
     'x-mock-variant': encodeURIComponent(selection.variant.name),
     'x-mock-sequence': `${selection.sequenceIndex + 1}/${selection.endpoint.variants.length}`,
   });
+  } catch (error) { failDelivery(); throw error; }
 };
 
 /** 处理 Mock Studio 的管理 API 请求 */
@@ -129,7 +163,7 @@ const handleRequest = async (request, response) => {
     if (pathname === '/api/token' && request.method === 'GET' && origin) return sendJson(response, 200, { token: managementToken });
     if (request.method !== 'OPTIONS' && request.headers['x-mock-token'] !== managementToken) return sendJson(response, 401, { code: 'UNAUTHORIZED', message: '缺少或无效的本机管理令牌' });
   }
-  if (pathname === '/runtime/dispatch') return handleDispatch(request, response, sendJson);
+  if (pathname === '/runtime/dispatch') return handleDispatch(request, response, sendMockJson);
   // 管理预检先返回，避免被资源变更路由误当成配置操作。
   if (request.method === 'OPTIONS') return sendJson(response, 204, null);
   if (await handleV2Api(request, response, pathname, { readJsonBody, sendJson, syncAndRecord })) return;
@@ -153,7 +187,11 @@ const handleRequest = async (request, response) => {
     return sendJson(response, 200, { hits });
   }
   if (request.method === 'POST' && pathname === '/api/whistle/sync') {
-    sendJson(response, 200, await syncAndRecord());
+    sendJson(response, 200, await syncAndRecord({ force: true }));
+    return;
+  }
+  if (request.method === 'POST' && pathname === '/api/whistle/check') {
+    sendJson(response, 200, await syncAndRecord({ verify: true }));
     return;
   }
   if (request.method === 'POST' && ['/api/packages/preview', '/api/packages/apply'].includes(pathname)) {
@@ -407,7 +445,7 @@ const handleRequest = async (request, response) => {
       if (!matchedProject) return null;
       // 在副本中更新并校验项目，避免非法输入覆盖已有配置。
       const candidate = structuredClone(matchedProject);
-      for (const key of ['name', 'description', 'enabled', 'pageUrl', 'flow']) if (Object.hasOwn(patch, key)) candidate[key] = patch[key];
+      for (const key of ['name', 'description', 'enabled', 'pageUrl', 'flow', 'cors']) if (Object.hasOwn(patch, key)) candidate[key] = patch[key];
       candidate.updatedAt = new Date().toISOString();
       validateProject(candidate);
       checkRuleConflicts(registry, candidate);
@@ -488,8 +526,10 @@ const handleRequest = async (request, response) => {
 
 /** 创建本地 Mock 管理与响应服务 */
 const server = http.createServer((request, response) => {
-  handleRequest(request, response).catch((error) => {
+  withRevision(request, () => handleRequest(request, response)).catch((error) => {
     console.error('[Mock Studio] request failed', error);
+    if (response.destroyed) return;
+    if (response.headersSent) { response.destroy(); return; }
     sendJson(response, error instanceof StudioError ? error.status : error instanceof SyntaxError ? 400 : 500, { code: error instanceof StudioError ? error.code : error instanceof SyntaxError ? 'INVALID_JSON' : 'INTERNAL_ERROR', message: error instanceof Error ? error.message : '未知服务错误' });
   });
 });
@@ -499,14 +539,21 @@ const registry = await readRegistry();
 
 server.listen(registry.settings.apiPort, host, async () => {
   /** 初次启动时的 Whistle 同步结果 */
-  const result = await syncAndRecord();
+  const result = await syncAndRecord({ force: true });
   console.log(`[Mock Studio] API running at http://${host}:${registry.settings.apiPort}`);
   console.log(`[Mock Studio] ${result.message}`);
 });
 
+// 定期回读托管规则，连接恢复或外部改写后重新提交；繁忙时不叠加任务。
+const healthTimer = process.env.MOCK_STUDIO_NO_WHISTLE === '1' ? null : setInterval(() => {
+  if (!syncActive && !pendingSync) void syncAndRecord({ verify: true }).catch((error) => console.error('[Mock Studio] 代理健康检查失败', error));
+}, 15000);
+healthTimer?.unref();
+
 // 桌面版退出前清除自身托管规则，避免代理继续指向已停止的服务。
 if (process.env.MOCK_STUDIO_CLEAR_ON_EXIT === '1') {
   process.once('SIGTERM', async () => {
+    clearInterval(healthTimer);
     try {
       await syncQueue.catch(() => {});
       await syncWhistleRules({ settings: registry.settings, projects: [] });

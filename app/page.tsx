@@ -2,13 +2,19 @@
 
 import { MockWorkspace } from '@/components/mock-workspace';
 import type { SingleMock, Combination } from '@/components/mock-workspace';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent } from 'react';
-import { Activity, Braces, CheckCircle2, ChevronRight, CircleDot, Clock3, Copy, Database, FileJson2, MoreHorizontal, Play, Plus, RotateCcw, Search, Settings2, Shuffle, TerminalSquare, Zap } from 'lucide-react';
+import { Activity, Braces, CheckCircle2, ChevronRight, CircleDot, Clock3, Copy, Database, FileJson2, MoreHorizontal, Play, Plus, RotateCcw, Search, Settings2, Shuffle, TerminalSquare, Zap, Upload, Download, ChevronDown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
-import { Textarea } from '@/components/ui/textarea';
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
+import { JsonEditor } from '@/components/json-editor';
+import { ThemeToggle } from '@/components/theme-toggle';
+import { RequestAddress } from '@/components/request-address';
+import { HitHistory } from '@/components/hit-history';
+import { projectStatus } from '@/lib/ui-model.mjs';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 
 /** 单个 Mock 响应场景的数据结构 */
@@ -18,13 +24,13 @@ type EndpointStats = { hits: number; lastHitAt: string | null };
 /** 可管理 Mock 接口的数据结构 */
 type MockEndpoint = { id: string; name: string; method: string; url: string; matchType: string; enabled: boolean; mode: 'fixed' | 'sequence' | 'state'; activeVariantId: string; delayMs: number; sequence: { currentIndex: number; afterEnd: 'hold-last' | 'loop' }; stats: EndpointStats; variants: MockVariant[]; stateVariants?: Record<string, string> };
 /** 项目分组的数据结构 */
-type MockProject = { id: string; name: string; description: string; enabled: boolean; pageUrl?: string; endpoints: MockEndpoint[]; mocks?: SingleMock[]; combinations?: Combination[]; flow?: { states: string[]; initialState: string; currentState: string; transitions: { from: string; to: string; endpointId: string; variantId: string }[] } };
+type MockProject = { id: string; revision?: string; cors?: { mode: 'manual' | 'allow-list'; origins?: string[]; headers?: string[]; credentials?: boolean }; name: string; description: string; enabled: boolean; pageUrl?: string; endpoints: MockEndpoint[]; mocks?: SingleMock[]; combinations?: Combination[]; flow?: { states: string[]; initialState: string; currentState: string; transitions: { from: string; to: string; endpointId: string; variantId: string }[] } };
 /** Whistle 同步状态 */
-type WhistleStatus = { ok: boolean; ruleCount: number; message: string; syncedAt: string | null };
+type WhistleStatus = { ok: boolean; verified?: boolean; desiredDigest?: string; verifiedDigest?: string; checkedAt?: string; lastSuccessAt?: string; ruleCount: number; message: string; syncedAt: string | null };
 /** 完整 Mock Studio 注册表 */
 type MockRegistry = { projects: MockProject[]; runtime: { whistle: WhistleStatus }; snapshots?: { id: string; projectId: string }[] };
 /** 代理实际记录的一次场景命中 */
-type MockHit = { combinationId?: string; outcome?: string; actualUrl?: string; expected?: { name: string; index: number }; id: string; timestamp: string; endpointId: string; variantName: string; status: number; stateBefore: string | null; stateAfter: string | null };
+type MockHit = { delivery?: 'selected' | 'finished' | 'failed' | 'aborted'; combinationId?: string; outcome?: string; actualUrl?: string; expected?: { name: string; index: number }; id: string; timestamp: string; endpointId: string; variantName: string; status: number; stateBefore: string | null; stateAfter: string | null };
 /** 当前打开的场景编辑目标 */
 type EditorTarget = { endpointId: string; variantId: string };
 
@@ -48,7 +54,10 @@ const getManagementToken = () => {
 /** 带统一错误处理的管理 API 请求 */
 const apiRequest = async <T,>(pathname: string, options: RequestInit = {}): Promise<T> => {
   /** 管理 API 的原始响应 */
-  const response = await fetch(`${apiBase}${pathname}`, { ...options, signal: options.signal ?? AbortSignal.timeout(25000), headers: { ...options.headers, 'content-type': 'application/json', 'x-mock-token': await getManagementToken() } });
+  const headers = new Headers(options.headers);
+  headers.set('content-type', 'application/json');
+  headers.set('x-mock-token', await getManagementToken());
+  const response = await fetch(`${apiBase}${pathname}`, { ...options, signal: options.signal ?? AbortSignal.timeout(25000), headers });
   /** 管理 API 解析后的数据 */
   const data = await response.json() as T & { message?: string };
   if (!response.ok) throw new Error(data.message ?? `HTTP ${response.status}`);
@@ -63,6 +72,13 @@ const formatTime = (value: string | null) => {
 
 /** Mock Studio 可视化控制台首页 */
 export default function Home() {
+  const packageInputRef = useRef<HTMLInputElement>(null);
+  const revisionsRef = useRef<Record<string, string | undefined>>({});
+  const [editorRevision, setEditorRevision] = useState<string | undefined>();
+  const [endpointRevision, setEndpointRevision] = useState<string | undefined>();
+  const [editorOriginal, setEditorOriginal] = useState('');
+  const [endpointOriginal, setEndpointOriginal] = useState('');
+  const [workspaceGuard, setWorkspaceGuard] = useState({ dirty: false, busy: false });
   /** 服务端返回的完整注册表 */
   const [registry, setRegistry] = useState<MockRegistry | null>(null);
   /** 是否显示新建项目输入框 */
@@ -105,6 +121,7 @@ export default function Home() {
     try {
       /** 最新注册表状态 */
       const nextRegistry = await apiRequest<MockRegistry>('/api/state');
+      revisionsRef.current = Object.fromEntries(nextRegistry.projects.map((project) => [project.id, project.revision]));
       setRegistry(nextRegistry);
       setConnected(true);
       if (!silent) setFeedback('配置已与本地服务同步');
@@ -115,16 +132,32 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    void loadRegistry();
+    const initialLoad = window.setTimeout(() => void loadRegistry(), 0);
     /** 实时刷新接口命中数和顺序进度的定时器 */
     const timer = window.setInterval(() => void loadRegistry(true), 2000);
-    return () => window.clearInterval(timer);
+    return () => { window.clearTimeout(initialLoad); window.clearInterval(timer); };
   }, [loadRegistry]);
+
+  const legacyDirty = Boolean((editorTarget && JSON.stringify([editorName, editorDelay, editorBody]) !== editorOriginal) || (endpointEditorId && JSON.stringify([endpointName, endpointMethod, endpointUrl]) !== endpointOriginal));
+  useEffect(() => {
+    const guard = (event: BeforeUnloadEvent) => { if (legacyDirty || saving) event.preventDefault(); };
+    window.addEventListener('beforeunload', guard);
+    return () => window.removeEventListener('beforeunload', guard);
+  }, [legacyDirty, saving]);
+  const changeProject = (id: string) => {
+    if (id === activeProjectId) return;
+    if (saving || workspaceGuard.busy) { setFeedback('正在保存，请稍后切换项目'); return; }
+    if ((workspaceGuard.dirty || legacyDirty) && !window.confirm('有未保存的编辑，确定切换项目并放弃吗？')) return;
+    setEditorTarget(null); setEndpointEditorId(null); setWorkspaceGuard({ dirty: false, busy: false });
+    setActiveProjectId(id);
+  };
 
   /** 当前选中的项目 */
   const activeProject = useMemo(() => registry?.projects.find((project) => project.id === activeProjectId) ?? registry?.projects[0] ?? null, [activeProjectId, registry]);
   // 统计包含组合接管的实际启用范围，项目关闭时显示零。
   const activeMockCount = activeProject?.enabled ? new Set([...(activeProject.mocks ?? []).filter((item) => item.enabled).map((item) => item.id), ...(activeProject.combinations ?? []).filter((item) => item.enabled).flatMap((item) => item.steps.map((step) => step.mockId))]).size + activeProject.endpoints.filter((item) => item.enabled).length : 0;
+  const status = registry ? projectStatus({ connected, enabled: activeProject?.enabled ?? false, count: activeMockCount, pending: saving || workspaceGuard.busy, whistle: registry.runtime.whistle }) : { tone: 'neutral', label: '正在连接本地服务', hint: '正在读取项目配置。' };
+  const proxyVerified = projectStatus({ connected, enabled: true, count: 1, pending: false, whistle: registry?.runtime.whistle }).tone === 'success';
   /** 当前项目最近一次导入所保存的恢复快照 */
   const activeSnapshot = useMemo(() => registry?.snapshots?.slice().reverse().find((item) => item.projectId === activeProject?.id), [registry?.snapshots, activeProject?.id]);
   /** 经过搜索过滤后的接口列表 */
@@ -197,6 +230,8 @@ export default function Home() {
 
   /** 导入包含内联 JSON 响应的场景包 */
   const importPackage = async (file: File) => {
+    if (saving || workspaceGuard.busy) return;
+    if ((workspaceGuard.dirty || legacyDirty) && !window.confirm('导入后将切换项目，确定放弃未保存的编辑吗？')) return;
     try {
       // 先验证完整场景包，再创建一个默认关闭的新项目。
       const pack = JSON.parse(await file.text());
@@ -209,6 +244,7 @@ export default function Home() {
       if (!window.confirm(`将导入「${preview.project.name}」，包含 ${preview.project.endpoints.length} 个旧接口、${preview.project.mocks?.length ?? 0} 条 Mock，项目默认关闭。继续吗？`)) return;
       // 本次管理操作的执行结果。
       const result = await apiRequest<{ project: MockProject; snapshotId: string; sync: WhistleStatus }>('/api/packages/apply', { method: 'POST', body: JSON.stringify(payload) });
+      setEditorTarget(null); setEndpointEditorId(null); setWorkspaceGuard({ dirty: false, busy: false });
       setActiveProjectId(result.project.id);
       await loadRegistry(true);
       setFeedback(result.sync.ok ? '场景包已导入，项目默认关闭' : result.sync.message);
@@ -256,6 +292,9 @@ export default function Home() {
 
   /** 使用接口当前信息打开基本配置面板 */
   const openEndpointEditor = (endpoint: MockEndpoint) => {
+    if (legacyDirty && !window.confirm('有未保存的修改，确定放弃吗？')) return;
+    setEndpointRevision(revisionsRef.current[activeProject?.id ?? '']);
+    setEndpointOriginal(JSON.stringify([endpoint.name, endpoint.method, endpoint.url]));
     setEndpointEditorId(endpoint.id);
     setEndpointName(endpoint.name);
     setEndpointMethod(endpoint.method);
@@ -278,7 +317,7 @@ export default function Home() {
     setEndpointError('');
     try {
       // 配置保存成功与 Whistle 规则同步成功分别检查。
-      const result = await apiRequest<{ sync: WhistleStatus }>(`/api/endpoints/${endpointEditorId}`, { method: 'PATCH', body: JSON.stringify({ name, method: endpointMethod, url }) });
+      const result = await apiRequest<{ sync: WhistleStatus }>(`/api/endpoints/${endpointEditorId}`, { method: 'PATCH', headers: endpointRevision ? { 'if-match': `"${endpointRevision}"` } : {}, body: JSON.stringify({ name, method: endpointMethod, url }) });
       await loadRegistry(true);
       if (!result.sync.ok) {
         setEndpointError(`接口信息已保存，但 ${result.sync.message}`);
@@ -315,17 +354,13 @@ export default function Home() {
   };
   /** 打开指定响应场景的 JSON 编辑抽屉 */
   const openEditor = (endpoint: MockEndpoint, variant: MockVariant) => {
+    if (legacyDirty && !window.confirm('有未保存的修改，确定放弃吗？')) return;
+    setEditorRevision(revisionsRef.current[activeProject?.id ?? '']);
+    setEditorOriginal(JSON.stringify([variant.name, String(variant.delayMs), JSON.stringify(variant.body, null, 2)]));
     setEditorTarget({ endpointId: endpoint.id, variantId: variant.id });
     setEditorName(variant.name);
     setEditorDelay(String(variant.delayMs));
     setEditorBody(JSON.stringify(variant.body, null, 2));
-  };
-  /** 格式化编辑器中的 JSON 文本 */
-  const formatEditorJson = () => {
-    try {
-      setEditorBody(JSON.stringify(JSON.parse(editorBody), null, 2));
-      setFeedback('JSON 格式正确');
-    } catch { setFeedback('JSON 格式错误，请检查逗号或引号'); }
   };
   /** 保存当前响应场景 */
   const saveVariant = async () => {
@@ -334,21 +369,24 @@ export default function Home() {
       /** 编辑器解析后的响应对象 */
       const body = JSON.parse(editorBody);
       setSaving(true);
-      await apiRequest(`/api/endpoints/${editorTarget.endpointId}/variants/${editorTarget.variantId}`, { method: 'PUT', body: JSON.stringify({ name: editorName, delayMs: Number(editorDelay), body }) });
+      await apiRequest(`/api/endpoints/${editorTarget.endpointId}/variants/${editorTarget.variantId}`, { method: 'PUT', headers: editorRevision ? { 'if-match': `"${editorRevision}"` } : {}, body: JSON.stringify({ name: editorName, delayMs: Number(editorDelay), body }) });
       setEditorTarget(null);
       setFeedback('响应 JSON 已保存，下次请求立即生效');
       await loadRegistry(true);
     } catch (error) {
-      setFeedback(error instanceof SyntaxError ? 'JSON 格式错误，暂未保存' : '保存响应失败');
+      setFeedback(error instanceof SyntaxError ? 'JSON 格式错误，暂未保存' : error instanceof Error ? error.message : '保存响应失败');
     } finally { setSaving(false); }
   };
   /** 通过轻量输入快速创建项目分组 */
   const createProject = async () => {
     /** 用户输入的新项目名称 */
+    if (saving || workspaceGuard.busy) return;
+    if ((workspaceGuard.dirty || legacyDirty) && !window.confirm('创建后将切换项目，确定放弃未保存的编辑吗？')) return;
     const name = newProjectName;
     if (!name?.trim()) return;
     /** 新建完成的项目 */
     const project = await apiRequest<MockProject>('/api/projects', { method: 'POST', body: JSON.stringify({ name: name.trim() }) });
+    setEditorTarget(null); setEndpointEditorId(null); setWorkspaceGuard({ dirty: false, busy: false });
     setActiveProjectId(project.id);
     setCreatingProject(false);
     setNewProjectName('');
@@ -379,38 +417,47 @@ export default function Home() {
   };
 
   return (
-    <main className="min-h-screen bg-[#080b10] text-slate-100">
-      <header className="sticky top-0 z-30 border-b border-white/8 bg-[#0b0e14]/92 backdrop-blur-xl">
+    <main className="min-h-screen bg-background text-foreground">
+      <header className="sticky top-0 z-30 border-b border-border bg-background/95 backdrop-blur-xl">
         <div className="flex min-h-16 items-center gap-5 px-5 lg:px-8">
-          <div className="flex items-center gap-3 pr-4"><div className="grid size-9 place-items-center rounded-xl bg-gradient-to-br from-violet-500 to-cyan-400 shadow-[0_0_24px_rgba(124,92,255,.28)]"><Zap className="size-4 fill-white text-white" /></div><div><p className="text-sm font-semibold tracking-tight">Mock Studio</p><p className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Local response lab</p></div></div>
+          <div className="flex items-center gap-3 pr-4"><div className="grid size-9 place-items-center rounded-xl bg-gradient-to-br from-violet-500 to-cyan-400 shadow-[0_0_24px_rgba(124,92,255,.28)]"><Zap className="size-4 fill-white text-white" /></div><div><p className="text-sm font-semibold tracking-tight">Mock Studio</p><p className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Local response lab</p></div></div>
           <nav className="no-scrollbar flex min-w-0 flex-1 items-end gap-1 overflow-x-auto self-stretch pt-3">
-            {(registry?.projects ?? []).map((project) => <button key={project.id} onClick={() => setActiveProjectId(project.id)} className={`relative flex h-full min-w-fit items-center gap-2 rounded-t-lg px-4 text-sm transition ${activeProject?.id === project.id ? 'bg-white/6 text-white' : 'text-slate-500 hover:bg-white/3 hover:text-slate-300'}`}><span className={`size-1.5 rounded-full ${project.enabled ? 'bg-emerald-400' : 'bg-slate-700'}`} />{project.name}{activeProject?.id === project.id && <span className="absolute inset-x-3 bottom-0 h-0.5 rounded-full bg-violet-400" />}</button>)}
-            <button onClick={() => setCreatingProject(true)} className="grid size-9 min-w-9 place-items-center self-center rounded-lg border border-dashed border-white/12 text-slate-500 hover:border-violet-400/50 hover:text-violet-300" title="新增项目"><Plus className="size-4" /></button>
-          </nav>
+            {(registry?.projects ?? []).map((project) => <button key={project.id} onClick={() => changeProject(project.id)} className={`relative flex h-full min-w-fit items-center gap-2 rounded-t-lg px-4 text-sm transition ${activeProject?.id === project.id ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}><span className={`size-1.5 rounded-full ${project.enabled ? 'bg-emerald-400' : 'bg-slate-700'}`} />{project.name}{activeProject?.id === project.id && <span className="absolute inset-x-3 bottom-0 h-0.5 rounded-full bg-violet-400" />}</button>)}
+            <button onClick={() => setCreatingProject(true)} className="grid size-9 min-w-9 place-items-center self-center rounded-lg border border-dashed border-border text-muted-foreground hover:border-violet-400/50 hover:text-violet-300" title="新增项目"><Plus className="size-4" /></button>
+          </nav><ThemeToggle />
 
         </div>
       </header>
 
-      {creatingProject && <div className="fixed inset-0 z-50 grid place-items-center bg-black/70"><form className="w-80 rounded-xl border border-white/10 bg-[#111620] p-5" onSubmit={(event) => { event.preventDefault(); void createProject().catch((error) => setFeedback(error.message)); }}><label className="text-sm text-slate-200" htmlFor="new-project-name">项目名称</label><Input id="new-project-name" autoFocus value={newProjectName} onChange={(event) => setNewProjectName(event.target.value)} className="mt-3" /><div className="mt-4 flex justify-end gap-2"><Button type="button" variant="ghost" onClick={() => setCreatingProject(false)}>取消</Button><Button type="submit" disabled={!newProjectName.trim()}>创建</Button></div></form></div>}
+      <Dialog open={creatingProject} onOpenChange={setCreatingProject}><DialogContent><DialogTitle>新建项目</DialogTitle><DialogDescription>按页面或业务分组管理 Mock 规则。</DialogDescription><form onSubmit={(event) => { event.preventDefault(); void createProject().catch((error) => setFeedback(error.message)); }}><label className="text-sm" htmlFor="new-project-name">项目名称</label><Input id="new-project-name" value={newProjectName} onChange={(event) => setNewProjectName(event.target.value)} className="mt-3" /><div className="mt-4 flex justify-end gap-2"><Button type="button" variant="ghost" onClick={() => setCreatingProject(false)}>取消</Button><Button type="submit" disabled={!newProjectName.trim()}>创建</Button></div></form></DialogContent></Dialog>
 
       <section className="mx-auto max-w-[1560px] px-5 py-7 lg:px-8">
         <div className="mb-7 flex flex-col justify-between gap-5 lg:flex-row lg:items-end">
-          <div><div className="mb-2 flex items-center gap-2 text-xs font-medium uppercase tracking-[0.15em] text-violet-300/80"><Database className="size-3.5" />Project workspace</div><h1 className="text-2xl font-semibold tracking-tight text-white">{activeProject?.name ?? 'Mock 项目'}</h1><p className="mt-1 text-sm text-slate-500">{activeProject?.description ?? '管理本地接口响应与切换状态'}</p></div>
-          <div className="flex flex-wrap items-center gap-3"><details className="relative"><summary className="cursor-pointer rounded-lg border border-white/10 px-3 py-2 text-sm text-slate-300">项目菜单</summary><div className="absolute right-0 z-20 mt-2 flex w-48 flex-col gap-2 rounded-xl border border-white/10 bg-[#111620] p-3"><label className="cursor-pointer px-2 py-1 text-sm text-slate-300">导入场景包<input type="file" accept=".json,application/json" className="hidden" onChange={(event) => { if (event.target.files?.[0]) void importPackage(event.target.files[0]); event.target.value = ''; }} /></label><Button variant="ghost" onClick={() => void exportPackage().catch((error) => setFeedback(error.message))}>导出场景包</Button>{activeSnapshot && <Button variant="ghost" onClick={() => void restorePackage()}>恢复导入</Button>}{Boolean(activeProject?.endpoints.length) && <Button variant="ghost" onClick={() => void migrateProject()}>预览旧数据迁移</Button>}</div></details><div className="relative w-full sm:w-72"><Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-600" /><Input value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder="搜索名称或 URL" className="h-10 border-white/8 bg-white/4 pl-9 text-slate-200 placeholder:text-slate-600" /></div></div>
+          <div><div className="mb-2 flex items-center gap-2 text-xs font-medium uppercase tracking-[0.15em] text-violet-300/80"><Database className="size-3.5" />Project workspace</div><h1 className="text-2xl font-semibold tracking-tight text-foreground">{activeProject?.name ?? 'Mock 项目'}</h1><p className="mt-1 text-sm text-muted-foreground">{activeProject?.description ?? '管理本地接口响应与切换状态'}</p></div>
+          <div className="flex flex-wrap items-center gap-3"><input ref={packageInputRef} type="file" aria-label="导入场景包文件" accept=".json,application/json" className="hidden" onChange={(event) => { if (event.target.files?.[0]) void importPackage(event.target.files[0]); event.target.value = ''; }} />
+            <DropdownMenu><DropdownMenuTrigger render={<Button variant="outline" className="h-10 gap-2 border-border bg-transparent font-normal text-foreground" />}>项目菜单<ChevronDown className="size-3.5 text-muted-foreground" /></DropdownMenuTrigger>
+              <DropdownMenuContent align="end" sideOffset={8} className="w-52 rounded-xl border border-border bg-popover p-1.5 shadow-xl">
+                <DropdownMenuItem className="project-menu-item" onClick={() => packageInputRef.current?.click()}><Upload />导入场景包</DropdownMenuItem>
+                <DropdownMenuItem className="project-menu-item" disabled={!activeProject} onClick={() => void exportPackage().catch((error) => setFeedback(error.message))}><Download />导出场景包</DropdownMenuItem>
+                {activeSnapshot && <DropdownMenuItem className="project-menu-item" onClick={() => void restorePackage()}><RotateCcw />恢复导入</DropdownMenuItem>}
+                {Boolean(activeProject?.endpoints.length) && <DropdownMenuItem className="project-menu-item" onClick={() => void migrateProject()}><Shuffle />预览旧数据迁移</DropdownMenuItem>}
+              </DropdownMenuContent>
+            </DropdownMenu><div className="relative w-full sm:w-72"><Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" /><Input value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder="搜索名称或 URL" className="h-10 border-border bg-muted pl-9 text-foreground placeholder:text-muted-foreground" /></div></div>
         </div>
 
+        <section className={`project-status status-${status.tone}`} aria-label="项目运行状态" aria-live="polite" aria-atomic="true"><span className="status-dot" aria-hidden="true" /><div><p className="font-medium">{status.label}</p><p className="mt-1 text-sm">{status.hint}</p></div></section>
         <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <div className="metric-card"><div className="metric-icon bg-violet-400/10 text-violet-300"><Activity /></div><div><p className="metric-value">{(activeProject?.mocks?.length ?? 0) + (activeProject?.endpoints.length ?? 0)}</p><p className="metric-label">接口总数</p></div></div>
-          <div className="metric-card"><div className="metric-icon bg-emerald-400/10 text-emerald-300"><CircleDot /></div><div><p className="metric-value">{activeMockCount}</p><p className="metric-label">正在拦截</p></div></div>
+          <div className="metric-card"><div className="metric-icon bg-emerald-400/10 text-emerald-300"><CircleDot /></div><div><p className="metric-value">{activeMockCount}</p><p className="metric-label">已启用规则</p></div></div>
           <div className="metric-card"><div className="metric-icon bg-cyan-400/10 text-cyan-300"><Shuffle /></div><div><p className="metric-value">{activeProject?.combinations?.length ?? 0}</p><p className="metric-label">高级组合</p></div></div>
-          <div className="metric-card"><div className={`metric-icon ${registry?.runtime.whistle.ok ? 'bg-emerald-400/10 text-emerald-300' : 'bg-amber-400/10 text-amber-300'}`}><TerminalSquare /></div><div><p className="metric-value text-sm!">{registry?.runtime.whistle.ok ? 'Whistle 已连接' : '等待 Whistle'}</p><p className="metric-label">{registry?.runtime.whistle.ruleCount ?? 0} 条规则已生成</p></div></div>
+          <div className="metric-card"><div className={`metric-icon ${proxyVerified ? 'bg-emerald-400/10 text-emerald-300' : 'bg-amber-400/10 text-amber-300'}`}><TerminalSquare /></div><div><p className="metric-value text-sm!">{proxyVerified ? 'Whistle 规则已验证' : 'Whistle 待验证'}</p><p className="metric-label" title={registry?.runtime.whistle.message}>全局代理 · {registry?.runtime.whistle.ruleCount ?? 0} 条规则 · {registry?.runtime.whistle.checkedAt ? formatTime(registry.runtime.whistle.checkedAt) : '尚未验证'}</p></div></div>
         </div>
 
-        <div className="overflow-hidden rounded-2xl border border-white/8 bg-[#0d1118] shadow-2xl shadow-black/20">
-          <div className="flex flex-col gap-4 border-b border-white/8 px-5 py-4 sm:flex-row sm:items-center sm:justify-between"><div className="flex items-center gap-3"><Switch checked={activeProject?.enabled ?? false} disabled={!activeProject || saving} onCheckedChange={(checked) => activeProject && void patchProject(activeProject.id, checked)} className="data-checked:bg-violet-500" /><div><p className="text-sm font-medium">项目总开关</p><p className="text-xs text-slate-500">关闭后所有接口直接访问线上服务</p></div></div><div className="flex items-center gap-2 text-xs text-slate-500"><span className={`size-2 rounded-full ${connected ? 'animate-pulse bg-emerald-400' : 'bg-rose-400'}`} />{feedback}</div></div>
-          {activeProject && <div className="p-5"><MockWorkspace key={activeProject.id} project={activeProject} search={searchText} hits={hits} request={apiRequest} refresh={() => loadRegistry(true)} notify={setFeedback} /></div>}
-          {Boolean(activeProject?.endpoints.length) && <><div className="px-5 pb-3 text-sm text-slate-400">旧版接口 / 流程 · 保留原有固定、顺序及共享状态行为</div><div className="overflow-x-auto">
-            <table className="w-full min-w-[1180px] border-collapse text-left"><thead className="bg-white/[0.018] text-[11px] uppercase tracking-[0.12em] text-slate-600"><tr><th className="w-16 px-5 py-3.5">状态</th><th className="px-4 py-3.5">接口</th><th className="px-4 py-3.5">请求</th><th className="px-4 py-3.5">响应策略</th><th className="px-4 py-3.5">当前场景</th><th className="px-4 py-3.5">延迟</th><th className="px-4 py-3.5">命中</th><th className="px-5 py-3.5 text-right">操作</th></tr></thead>
+        <div className="workspace-card overflow-hidden rounded-2xl border border-border bg-card shadow-2xl shadow-black/20">
+          <div className="flex flex-col gap-4 border-b border-border px-5 py-4 sm:flex-row sm:items-center sm:justify-between"><div className="flex items-center gap-3"><Switch aria-label="项目总开关" checked={activeProject?.enabled ?? false} disabled={!activeProject || saving} onCheckedChange={(checked) => activeProject && void patchProject(activeProject.id, checked)} className="data-checked:bg-violet-500" /><div><p className="text-sm font-medium">项目总开关</p><p className="text-xs text-muted-foreground">关闭后所有接口直接访问线上服务</p></div></div><div className="flex items-center gap-2 text-xs text-muted-foreground"><span className={`size-2 rounded-full ${connected ? 'animate-pulse bg-emerald-400' : 'bg-rose-400'}`} />{feedback}</div></div>
+          {activeProject && <div className="p-5"><MockWorkspace key={activeProject.id} project={activeProject} proxyReady={status.tone === 'success'} search={searchText} hits={hits} request={apiRequest} refresh={() => loadRegistry(true)} notify={setFeedback} onGuardChange={setWorkspaceGuard} /></div>}
+          {Boolean(activeProject?.endpoints.length) && <><div className="px-5 pb-3 text-sm text-muted-foreground">旧版接口 / 流程 · 保留原有固定、顺序及共享状态行为</div><div className="overflow-x-auto">
+            <table className="w-full min-w-[1180px] border-collapse text-left"><thead className="bg-muted text-[11px] uppercase tracking-[0.12em] text-muted-foreground"><tr><th className="w-16 px-5 py-3.5">状态</th><th className="px-4 py-3.5">接口</th><th className="px-4 py-3.5">请求</th><th className="px-4 py-3.5">响应策略</th><th className="px-4 py-3.5">当前场景</th><th className="px-4 py-3.5">延迟</th><th className="px-4 py-3.5">命中</th><th className="px-5 py-3.5 text-right">操作</th></tr></thead>
               <tbody>{visibleEndpoints.map((endpoint) => {
                 /** 固定模式当前选择的响应场景 */
                 const activeVariant = endpoint.variants.find((variant) => variant.id === endpoint.activeVariantId) ?? endpoint.variants[0];
@@ -418,44 +465,44 @@ export default function Home() {
                 const sequenceVariant = endpoint.variants[Math.min(endpoint.sequence.currentIndex, endpoint.variants.length - 1)];
                 /** 当前界面需要展示的响应场景 */
                 const displayedVariant = endpoint.mode === 'sequence' ? sequenceVariant : endpoint.mode === 'state' ? endpoint.variants.find((item) => item.id === endpoint.stateVariants?.[activeProject?.flow?.currentState ?? '']) : activeVariant;
-                return <tr key={endpoint.id} className="group border-t border-white/6 transition hover:bg-white/[0.025]">
-                  <td className="px-5 py-5"><Switch checked={endpoint.enabled} disabled={saving || !activeProject?.enabled} onCheckedChange={(checked) => void patchEndpoint(endpoint.id, { enabled: checked })} className="data-checked:bg-violet-500" /></td>
-                  <td className="max-w-[440px] px-4 py-5"><div className="mb-1.5 flex items-center gap-2"><span className="font-medium text-slate-200">{endpoint.name}</span>{endpoint.mode === 'sequence' && <span className="badge-sequence"><Shuffle />SEQ</span>}</div><p className="truncate font-mono text-xs text-slate-600" title={endpoint.url}>{endpoint.url}</p></td>
-                  <td className="px-4 py-5"><span className="method-badge">{endpoint.method}</span><p className="mt-2 text-[11px] text-slate-600">精确匹配</p></td>
-                  <td className="px-4 py-5"><div className="inline-flex rounded-lg border border-white/8 bg-black/20 p-1"><button onClick={() => void patchEndpoint(endpoint.id, { mode: 'fixed' })} className={`strategy-button ${endpoint.mode === 'fixed' ? 'strategy-button-active' : ''}`}>固定</button><button onClick={() => void patchEndpoint(endpoint.id, { mode: 'sequence' })} className={`strategy-button ${endpoint.mode === 'sequence' ? 'strategy-button-active' : ''}`}>顺序</button></div></td>
-                  <td className="min-w-52 px-4 py-5"><button className="flex w-full items-center gap-3 text-left" onClick={() => displayedVariant && openEditor(endpoint, displayedVariant)}><div className="grid size-8 place-items-center rounded-lg bg-white/5 text-slate-400"><FileJson2 className="size-4" /></div><div className="min-w-0 flex-1"><p className="truncate text-sm text-slate-300">{displayedVariant?.name ?? '无场景'}</p><p className="text-[11px] text-slate-600">{endpoint.mode === 'sequence' ? `下一次 ${endpoint.sequence.currentIndex + 1} / ${endpoint.variants.length}` : endpoint.mode === 'state' ? `流程状态：${activeProject?.flow?.currentState ?? '未配置'}` : `${endpoint.variants.length} 个可选场景`}</p></div><ChevronRight className="size-4 text-slate-700" /></button></td>
-                  <td className="px-4 py-5"><div className="flex items-center gap-1.5 text-sm text-slate-400"><Clock3 className="size-3.5 text-slate-600" />{displayedVariant?.delayMs ?? endpoint.delayMs}ms</div></td>
-                  <td className="px-4 py-5"><p className="text-sm text-slate-400">{endpoint.stats.hits} 次</p><p className="mt-1 text-[11px] text-slate-600">{formatTime(endpoint.stats.lastHitAt)}</p></td>
+                return <tr key={endpoint.id} className="group border-t border-border transition hover:bg-muted">
+                  <td className="px-5 py-5" aria-label={`接口开关：${endpoint.name}`}><Switch aria-label={`启用旧接口：${endpoint.name}`} checked={endpoint.enabled} disabled={saving || !activeProject?.enabled} onCheckedChange={(checked) => void patchEndpoint(endpoint.id, { enabled: checked })} className="data-checked:bg-violet-500" /></td>
+                  <td className="max-w-[440px] px-4 py-5"><div className="mb-1.5 flex items-center gap-2"><span className="font-medium text-foreground">{endpoint.name}</span>{endpoint.mode === 'sequence' && <span className="badge-sequence"><Shuffle />SEQ</span>}</div><RequestAddress value={endpoint.url} notify={setFeedback} /></td>
+                  <td className="px-4 py-5"><span className="method-badge">{endpoint.method}</span><p className="mt-2 text-[11px] text-muted-foreground">精确匹配</p></td>
+                  <td className="px-4 py-5" aria-label={`响应策略：${endpoint.name}`}><div className="inline-flex rounded-lg border border-border bg-background/50 p-1"><button onClick={() => void patchEndpoint(endpoint.id, { mode: 'fixed' })} className={`strategy-button ${endpoint.mode === 'fixed' ? 'strategy-button-active' : ''}`}>固定</button><button onClick={() => void patchEndpoint(endpoint.id, { mode: 'sequence' })} className={`strategy-button ${endpoint.mode === 'sequence' ? 'strategy-button-active' : ''}`}>顺序</button></div></td>
+                  <td className="min-w-52 px-4 py-5"><button className="flex w-full items-center gap-3 text-left" onClick={() => displayedVariant && openEditor(endpoint, displayedVariant)}><div className="grid size-8 place-items-center rounded-lg bg-muted text-muted-foreground"><FileJson2 className="size-4" /></div><div className="min-w-0 flex-1"><p className="truncate text-sm text-foreground">{displayedVariant?.name ?? '无场景'}</p><p className="text-[11px] text-muted-foreground">{endpoint.mode === 'sequence' ? `下一次 ${endpoint.sequence.currentIndex + 1} / ${endpoint.variants.length}` : endpoint.mode === 'state' ? `流程状态：${activeProject?.flow?.currentState ?? '未配置'}` : `${endpoint.variants.length} 个可选场景`}</p></div><ChevronRight className="size-4 text-muted-foreground" /></button></td>
+                  <td className="px-4 py-5"><div className="flex items-center gap-1.5 text-sm text-muted-foreground"><Clock3 className="size-3.5 text-muted-foreground" />{displayedVariant?.delayMs ?? endpoint.delayMs}ms</div></td>
+                  <td className="px-4 py-5"><p className="text-sm text-muted-foreground">{endpoint.stats.hits} 次</p><p className="mt-1 text-[11px] text-muted-foreground">{formatTime(endpoint.stats.lastHitAt)}</p></td>
                   <td className="px-5 py-5"><div className="flex justify-end gap-1">{endpoint.mode === 'sequence' && <><Button size="icon-sm" variant="ghost" title="回到第一步" onClick={() => void resetEndpoint(endpoint.id)}><RotateCcw /></Button><Button size="icon-sm" variant="ghost" title="前进一个响应" onClick={() => void advanceEndpoint(endpoint.id)}><Play /></Button></>}<Button size="icon-sm" variant="ghost" title="编辑当前响应" onClick={() => displayedVariant && openEditor(endpoint, displayedVariant)}><Braces /></Button><Button size="icon-sm" variant="ghost" title="克隆接口" onClick={() => void cloneEndpoint(endpoint.id)}><Copy /></Button><Button size="icon-sm" variant="ghost" title="编辑接口信息" aria-label={`编辑接口信息：${endpoint.name}`} onClick={() => openEndpointEditor(endpoint)}><MoreHorizontal /></Button></div></td>
                 </tr>;
               })}</tbody>
             </table>
           </div>
           </>}
-          {Boolean(activeProject?.endpoints.length) && visibleEndpoints.length === 0 && <div className="grid min-h-64 place-items-center text-center"><div><Search className="mx-auto mb-3 size-8 text-slate-700" /><p className="text-sm text-slate-400">没有匹配的接口</p><p className="mt-1 text-xs text-slate-600">换个关键词，或为当前项目添加接口</p></div></div>}
+          {Boolean(activeProject?.endpoints.length) && visibleEndpoints.length === 0 && <div className="grid min-h-64 place-items-center text-center"><div><Search className="mx-auto mb-3 size-8 text-muted-foreground" /><p className="text-sm text-muted-foreground">没有匹配的接口</p><p className="mt-1 text-xs text-muted-foreground">换个关键词，或为当前项目添加接口</p></div></div>}
         </div>
-        <details className="mt-4 rounded-xl border border-white/10 p-4 text-xs text-slate-500"><summary className="cursor-pointer">角标诊断与注入条件</summary><p className="mt-2 leading-6">自动注入需要文档请求包含 Sec-Fetch-Dest: document 或 iframe，且页面允许执行注入脚本。普通 HTTP 域名页面可能不携带此头；CSP、缓存或其他代理规则也可能阻止注入。此时接口仍可命中，请查看最近命中与 x-mock-source 响应头。角标仅统计成功返回 Mock 的接口，顺序不匹配单独记入日志。</p></details><div className="mt-5 rounded-xl border border-white/10 p-4"><h2 className="mb-3 text-sm font-medium text-slate-200">最近命中</h2>{hits.length ? hits.map((hit) => <p key={hit.id} className="mb-1 text-xs text-slate-400">{formatTime(hit.timestamp)} · {hit.endpointId ?? hit.actualUrl} · {hit.outcome === 'order-mismatch' ? `顺序不匹配：等待 ${hit.expected?.name}` : hit.variantName} · HTTP {hit.status}{hit.stateBefore ? ` · ${hit.stateBefore} → ${hit.stateAfter}` : ''}</p>) : <p className="text-xs text-slate-500">暂无命中记录</p>}</div><footer className="mt-4 flex flex-col gap-2 px-1 text-xs text-slate-600 sm:flex-row sm:items-center sm:justify-between"><p className="flex items-center gap-2"><CheckCircle2 className="size-3.5 text-emerald-500" />配置写入本地文件，页面与 CLI 实时共享</p><p className="font-mono">npm run mock -- list</p></footer>
+        <details className="mt-4 rounded-xl border border-border p-4 text-xs text-muted-foreground"><summary className="cursor-pointer">角标诊断与注入条件</summary><p className="mt-2 leading-6">自动注入需要文档请求包含 Sec-Fetch-Dest: document 或 iframe，且页面允许执行注入脚本。普通 HTTP 域名页面可能不携带此头；CSP、缓存或其他代理规则也可能阻止注入。此时接口仍可命中，请查看最近命中与 x-mock-source 响应头。角标仅统计成功返回 Mock 的接口，顺序不匹配单独记入日志。</p></details><HitHistory hits={hits} notify={setFeedback} /><footer className="mt-4 flex flex-col gap-2 px-1 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between"><p className="flex items-center gap-2"><CheckCircle2 className="size-3.5 text-emerald-500" />配置写入本地文件，页面与 CLI 实时共享</p><p className="font-mono">npm run mock -- list</p></footer>
       </section>
 
-      <Sheet open={Boolean(endpointEditorId)} onOpenChange={(open) => { if (!open && !saving) setEndpointEditorId(null); }}>
-        <SheetContent className="w-full border-white/10 bg-[#0c1017] p-0 sm:max-w-[600px]" showCloseButton>
-          <SheetHeader className="border-b border-white/8 px-6 py-5">
-            <SheetTitle className="text-lg text-white">编辑接口信息</SheetTitle>
-            <SheetDescription className="text-slate-400">修改后将同步 Whistle 规则。已启用的接口会按新的地址和方法匹配。</SheetDescription>
+      <Sheet open={Boolean(endpointEditorId)} onOpenChange={(open) => { if (!open && !saving && (!legacyDirty || window.confirm('有未保存的修改，确定放弃吗？'))) setEndpointEditorId(null); }}>
+        <SheetContent className="w-full border-border bg-popover p-0 sm:max-w-[600px]" showCloseButton>
+          <SheetHeader className="border-b border-border px-6 py-5">
+            <SheetTitle className="text-lg text-foreground">编辑接口信息</SheetTitle>
+            <SheetDescription className="text-muted-foreground">修改后将同步 Whistle 规则。已启用的接口会按新的地址和方法匹配。</SheetDescription>
           </SheetHeader>
           <form className="flex flex-1 flex-col" onSubmit={(event) => { event.preventDefault(); void saveEndpoint(); }}>
-            <div className="flex-1 space-y-5 overflow-y-auto px-6 py-5">
-              <label className="editor-label">接口名称<Input aria-label="接口名称" value={endpointName} onChange={(event) => setEndpointName(event.target.value)} className="editor-input" /></label>
+            <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-5">
+              <label className="editor-label" htmlFor="endpoint-name">接口名称<Input id="endpoint-name" aria-label="接口名称" value={endpointName} onChange={(event) => setEndpointName(event.target.value)} className="editor-input" /></label>
               <label className="editor-label">请求方法<select aria-label="请求方法" value={endpointMethod} onChange={(event) => setEndpointMethod(event.target.value)} className="editor-input h-10 w-full rounded-md px-3"><option value="GET">GET</option><option value="POST">POST</option><option value="PUT">PUT</option><option value="PATCH">PATCH</option><option value="DELETE">DELETE</option></select></label>
-              <label className="editor-label">接口地址<Input aria-label="接口地址" type="url" value={endpointUrl} onChange={(event) => setEndpointUrl(event.target.value)} placeholder="http://example.com/api/query" className="editor-input" /></label>
+              <label className="editor-label" htmlFor="endpoint-url">接口地址<Input id="endpoint-url" aria-label="接口地址" type="url" value={endpointUrl} onChange={(event) => setEndpointUrl(event.target.value)} placeholder="http://example.com/api/query" className="editor-input" /></label>
               {endpointError && <p role="alert" className="rounded-lg border border-rose-400/30 bg-rose-400/10 p-3 text-sm text-rose-200">{endpointError}</p>}
             </div>
-            <div className="flex justify-end gap-2 border-t border-white/8 px-6 py-4"><Button type="button" variant="ghost" disabled={saving} onClick={() => setEndpointEditorId(null)}>取消</Button><Button type="submit" disabled={saving} className="bg-violet-500 text-white hover:bg-violet-400">{saving ? '保存中…' : '保存接口信息'}</Button></div>
+            <div className="flex justify-end gap-2 border-t border-border px-6 py-4"><Button type="button" variant="ghost" disabled={saving} onClick={() => { if (!legacyDirty || window.confirm('有未保存的修改，确定放弃吗？')) setEndpointEditorId(null); }}>取消</Button><Button type="submit" disabled={saving} className="bg-primary text-primary-foreground hover:bg-primary/90">{saving ? '保存中…' : '保存接口信息'}</Button></div>
           </form>
         </SheetContent>
       </Sheet>
 
-      <Sheet open={Boolean(editorTarget)} onOpenChange={(open) => !open && setEditorTarget(null)}><SheetContent className="w-full border-white/10 bg-[#0c1017] p-0 sm:max-w-[720px]" showCloseButton><SheetHeader className="border-b border-white/8 px-6 py-5"><div className="mb-2 flex items-center gap-2 text-xs text-violet-300"><Settings2 className="size-3.5" />响应场景编辑器</div><SheetTitle className="text-lg text-white">{editorEndpoint?.name}</SheetTitle><SheetDescription className="font-mono text-xs text-slate-600">{editorEndpoint?.method} {editorEndpoint?.url}</SheetDescription></SheetHeader><div className="flex-1 space-y-5 overflow-y-auto px-6 py-5"><div className="flex gap-2 overflow-x-auto">{editorEndpoint?.variants.map((variant) => <button key={variant.id} onClick={() => openEditor(editorEndpoint, variant)} className={`rounded-lg border px-3 py-2 text-xs ${editorTarget?.variantId === variant.id ? 'border-violet-400/40 bg-violet-400/10 text-violet-200' : 'border-white/8 bg-white/3 text-slate-500'}`}>{variant.name}</button>)}</div><div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" onClick={() => void manageVariant('add')}>新增场景</Button><Button size="sm" variant="outline" onClick={() => void manageVariant('clone')}>复制</Button><Button size="sm" variant="outline" onClick={() => void manageVariant('delete')}>删除</Button><Button size="sm" variant="outline" onClick={() => void manageVariant('up')}>上移</Button><Button size="sm" variant="outline" onClick={() => void manageVariant('down')}>下移</Button><label className="cursor-pointer rounded-md border border-white/10 px-3 py-1.5 text-xs text-slate-300">导入 JSON<input type="file" accept=".json,application/json" multiple className="hidden" onChange={(event) => void importVariantFiles(event)} /></label>{editorEndpoint && editorTarget && <Button size="sm" variant="outline" onClick={() => void patchEndpoint(editorEndpoint.id, { mode: 'fixed', activeVariantId: editorTarget.variantId })}>设为固定场景</Button>}{editorEndpoint && <Button size="sm" variant="outline" onClick={() => void patchEndpoint(editorEndpoint.id, { sequence: { ...editorEndpoint.sequence, afterEnd: editorEndpoint.sequence.afterEnd === 'loop' ? 'hold-last' : 'loop' } })}>结束：{editorEndpoint.sequence.afterEnd === 'loop' ? '循环' : '停留'}</Button>}</div><div className="grid gap-4 sm:grid-cols-[1fr_140px]"><label className="editor-label">场景名称<Input value={editorName} onChange={(event) => setEditorName(event.target.value)} className="editor-input" /></label><label className="editor-label">延迟（ms）<Input type="number" min="0" value={editorDelay} onChange={(event) => setEditorDelay(event.target.value)} className="editor-input" /></label></div><div><div className="mb-2 flex items-center justify-between"><span className="editor-label mb-0">响应 JSON</span><Button size="sm" variant="ghost" onClick={formatEditorJson}><Braces />格式化</Button></div><Textarea aria-label="响应 JSON" value={editorBody} onChange={(event) => setEditorBody(event.target.value)} spellCheck={false} className="min-h-[460px] resize-none border-white/8 bg-[#080b10] p-4 font-mono text-[12px] leading-6 text-cyan-100/85 focus-visible:border-violet-400/50" /></div><div className="rounded-xl border border-cyan-400/10 bg-cyan-400/5 p-4 text-xs leading-5 text-cyan-100/55">保存后无需重启服务，下一个命中该场景的请求会直接使用新 JSON。响应头会自动加入 <code className="text-cyan-300">x-mock-source: mock-studio</code>，便于在 DevTools 中确认 Mock 是否生效。</div></div><div className="flex items-center justify-between border-t border-white/8 bg-black/15 px-6 py-4"><span className="text-xs text-slate-600">状态码 {editorVariant?.status ?? 200}</span><div className="flex gap-2"><Button variant="ghost" onClick={() => setEditorTarget(null)}>取消</Button><Button disabled={saving} className="bg-violet-500 text-white hover:bg-violet-400" onClick={() => void saveVariant()}>{saving ? '保存中…' : '保存并立即生效'}</Button></div></div></SheetContent></Sheet>
+      <Sheet open={Boolean(editorTarget)} onOpenChange={(open) => { if (!open && !saving && (!legacyDirty || window.confirm('有未保存的修改，确定放弃吗？'))) setEditorTarget(null); }}><SheetContent className="response-editor-sheet border-border bg-popover p-0" showCloseButton><SheetHeader className="border-b border-border px-6 py-5"><div className="mb-2 flex items-center gap-2 text-xs text-violet-300"><Settings2 className="size-3.5" />响应场景编辑器</div><SheetTitle className="text-lg text-foreground">{editorEndpoint?.name}</SheetTitle><SheetDescription className="font-mono text-xs text-muted-foreground">{editorEndpoint?.method} {editorEndpoint?.url}</SheetDescription></SheetHeader><div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-5"><div className="flex gap-2 overflow-x-auto">{editorEndpoint?.variants.map((variant) => <button key={variant.id} onClick={() => openEditor(editorEndpoint, variant)} className={`rounded-lg border px-3 py-2 text-xs ${editorTarget?.variantId === variant.id ? 'border-violet-400/40 bg-violet-400/10 text-violet-200' : 'border-border bg-muted text-muted-foreground'}`}>{variant.name}</button>)}</div><div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" onClick={() => void manageVariant('add')}>新增场景</Button><Button size="sm" variant="outline" onClick={() => void manageVariant('clone')}>复制</Button><Button size="sm" variant="outline" onClick={() => void manageVariant('delete')}>删除</Button><Button size="sm" variant="outline" onClick={() => void manageVariant('up')}>上移</Button><Button size="sm" variant="outline" onClick={() => void manageVariant('down')}>下移</Button><label className="cursor-pointer rounded-md border border-border px-3 py-1.5 text-xs text-foreground">导入 JSON<input type="file" accept=".json,application/json" multiple className="hidden" onChange={(event) => void importVariantFiles(event)} /></label>{editorEndpoint && editorTarget && <Button size="sm" variant="outline" onClick={() => void patchEndpoint(editorEndpoint.id, { mode: 'fixed', activeVariantId: editorTarget.variantId })}>设为固定场景</Button>}{editorEndpoint && <Button size="sm" variant="outline" onClick={() => void patchEndpoint(editorEndpoint.id, { sequence: { ...editorEndpoint.sequence, afterEnd: editorEndpoint.sequence.afterEnd === 'loop' ? 'hold-last' : 'loop' } })}>结束：{editorEndpoint.sequence.afterEnd === 'loop' ? '循环' : '停留'}</Button>}</div><div className="grid gap-4 sm:grid-cols-[1fr_140px]"><label className="editor-label" htmlFor="variant-name">场景名称<Input id="variant-name" value={editorName} onChange={(event) => setEditorName(event.target.value)} className="editor-input" /></label><label className="editor-label" htmlFor="variant-delay">延迟（ms）<Input id="variant-delay" type="number" min="0" value={editorDelay} onChange={(event) => setEditorDelay(event.target.value)} className="editor-input" /></label></div><JsonEditor label="响应 JSON" value={editorBody} onChange={setEditorBody} disabled={saving} /><div className="rounded-xl border border-cyan-400/10 bg-cyan-400/5 p-4 text-xs leading-5 text-muted-foreground">保存后无需重启服务，下一个命中该场景的请求会直接使用新 JSON。响应头会自动加入 <code className="text-cyan-300">x-mock-source: mock-studio</code>，便于在 DevTools 中确认 Mock 是否生效。</div></div><div className="flex shrink-0 items-center justify-between border-t border-border bg-popover px-6 py-4"><span className="text-xs text-muted-foreground">状态码 {editorVariant?.status ?? 200}</span><div className="flex gap-2"><Button variant="ghost" onClick={() => { if (!saving && (!legacyDirty || window.confirm('有未保存的修改，确定放弃吗？'))) setEditorTarget(null); }}>取消</Button><Button disabled={saving} className="bg-primary text-primary-foreground hover:bg-primary/90" onClick={() => void saveVariant()}>{saving ? '保存中…' : '保存并立即生效'}</Button></div></div></SheetContent></Sheet>
     </main>
   );
 }

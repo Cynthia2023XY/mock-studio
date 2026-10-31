@@ -1,8 +1,10 @@
+import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { activeRules, normalizeUrl } from './rules.mjs';
 import { proxyKey } from './dispatcher.mjs';
 import { chmod, mkdir, writeFile } from 'node:fs/promises';
-import { spawnSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import http from 'node:http';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -22,6 +24,9 @@ const whistleCliPath = process.env.MOCK_STUDIO_WHISTLE_CLI ?? '/Applications/Whi
 
 /** Whistle 客户端提供的连接配置与认证工具 */
 const requireModule = createRequire(import.meta.url);
+
+/** 异步执行 CLI，规则同步等待期间继续处理 Mock 与管理请求 */
+const execFileAsync = promisify(execFile);
 
 /** 注入业务页面的命中提示脚本 */
 const noticeScriptPath = path.join(generatedDirectory, 'mock-notice.inject.js');
@@ -43,7 +48,7 @@ const escapeRuleValue = (value) => String(value).replace(/\s/g, encodeURICompone
 /** 根据注册表生成所有启用接口的 Whistle 转发规则 */
 export const compileWhistleRules = (registry, runtimeKey = proxyKey) => {
   // 每条候选范围都转到相同入口，重叠规则不会决定最终响应。
-  const entries = registry.projects.flatMap(activeRules);
+  const entries = registry.projects.flatMap((project) => activeRules(project).map((entry) => ({ ...entry, autoCors: project.cors?.mode === 'allow-list' })));
   // 原始地址由代理覆盖写入，运行凭据与管理令牌相互独立。
   const metadata = 'reqHeaders://`{"x-mock-original-url":"${{url}}","x-mock-proxy-key":"' + runtimeKey + '"}`';
   // 自动生成的正则只表达字面值，不接受用户提供的正则语法。
@@ -52,7 +57,9 @@ export const compileWhistleRules = (registry, runtimeKey = proxyKey) => {
   const rules = entries.map((entry) => {
     // 所有规则共享统一元数据和运行入口。
     const matcher = entry.match.type === 'legacy' ? escapeRuleValue(entry.match.value) : entry.match.type === 'exact' ? `/^${literal(normalizeUrl(entry.match.value))}$/` : `/^(?=https?:\\/\\/).*${literal(entry.match.value)}/`;
-    return `${matcher} http://127.0.0.1:${registry.settings.apiPort}/runtime/dispatch ${metadata} includeFilter://m:${entry.method}`;
+    const forward = `${matcher} http://127.0.0.1:${registry.settings.apiPort}/runtime/dispatch ${metadata}`;
+    const autoCors = entry.autoCors;
+    return [`${forward} includeFilter://m:${entry.method}`, ...(autoCors && entry.method !== 'OPTIONS' ? [`${forward} includeFilter://m:OPTIONS`] : [])].join('\n');
   }).join('\n');
   // 仅有启用的候选规则时才注入提示脚本。
   const hasActiveEndpoint = entries.length > 0;
@@ -71,17 +78,23 @@ export const renderWhistleConfig = (rules) => {
 
 /** 从 Whistle 客户端回读托管规则，确认旧规则确实已被覆盖 */
 const readManagedRules = async () => {
+  const signal = AbortSignal.timeout(8000);
   // 复用客户端配置，确保回读的是 add --client 使用的同一个代理。
   const client = requireModule(path.join(path.dirname(whistleCliPath), 'use.js'));
-  const config = await new Promise((resolve, reject) => client.getConfig(true, (error, value) => error ? reject(error) : resolve(value)));
+  const config = await new Promise((resolve, reject) => {
+    const abort = () => reject(new Error('读取 Whistle 客户端配置超时'));
+    signal.addEventListener('abort', abort, { once: true });
+    client.getConfig(true, (error, value) => { signal.removeEventListener('abort', abort); if (error) reject(error); else resolve(value); });
+  });
   // 请求只读取当前工具管理的规则组，不影响用户其他规则。
   const options = client.getReqOpts(config.options, 'rules/value?name=mock-studio-managed');
   return new Promise((resolve, reject) => {
     // 使用客户端内部配置的本机连接及认证头读取规则内容。
-    const request = http.get(options, (response) => {
+    const request = http.get({ ...options, signal }, (response) => {
       // 合并规则管理接口的响应正文。
       const chunks = [];
-      response.on('data', (chunk) => chunks.push(chunk));
+      let size = 0;
+      response.on('data', (chunk) => { size += chunk.length; if (size > 2 * 1024 * 1024) request.destroy(new Error('Whistle 回读规则过大')); else chunks.push(chunk); });
       response.on('error', reject);
       response.on('end', () => {
         try {
@@ -97,21 +110,38 @@ const readManagedRules = async () => {
   });
 };
 
+let verifiedRules = null;
+let verifiedResult = null;
+
 /** 生成规则文件，并尝试同步到已运行的 Whistle 桌面客户端 */
-export const syncWhistleRules = async (registry) => {
+export const syncWhistleRules = async (registry, { force = false, verify = false } = {}) => {
   if (process.env.MOCK_STUDIO_NO_WHISTLE === '1') return { ok: true, rulesPath: '', ruleCount: 0, message: '测试环境未同步 Whistle' };
   /** 本次生成的规则正文 */
   const rules = compileWhistleRules(registry);
   /** 可被 w2 add 识别的 JS 配置内容 */
   const source = renderWhistleConfig(rules);
+  const digest = createHash('sha256').update(rules).digest('hex');
+  if (!force && verifiedRules === rules && verifiedResult?.ok) {
+    if (!verify) return { ...verifiedResult, skipped: true };
+    try {
+      const actual = await readManagedRules();
+      if (actual.value.trim() === (rules || '# Mock Studio: 当前没有启用的规则').trim() && actual.selected) {
+        verifiedResult = { ...verifiedResult, checkedAt: new Date().toISOString() };
+        return { ...verifiedResult, skipped: true };
+      }
+    } catch { /* 断线或外部改写时重新提交并验证，不能沿用历史成功 */ }
+    verifiedRules = null;
+  }
   await mkdir(generatedDirectory, { recursive: true });
   await writeFile(generatedRulesPath, source, { encoding: 'utf8', mode: 0o600 });
   await chmod(generatedRulesPath, 0o600);
   /** Whistle CLI 同步执行结果 */
-  const result = spawnSync(process.execPath, [whistleCliPath, 'add', generatedRulesPath, '--client', '--force'], {
+  const result = await execFileAsync(process.execPath, [whistleCliPath, 'add', generatedRulesPath, '--client', '--force'], {
     encoding: 'utf8',
     timeout: 8000,
-  });
+    killSignal: 'SIGKILL',
+    maxBuffer: 1024 * 1024,
+  }).then((output) => ({ ...output, status: 0 }), (error) => ({ error, status: error.code, stdout: error.stdout, stderr: error.stderr }));
   /** 同步失败时用于界面展示的错误文本 */
   const errorMessage = result.error?.message || result.stderr?.trim() || result.stdout?.trim() || '';
   if (result.status === 0) {
@@ -121,13 +151,20 @@ export const syncWhistleRules = async (registry) => {
       const expected = rules || '# Mock Studio: 当前没有启用的规则';
       if (actual.value.trim() !== expected.trim() || !actual.selected) throw new Error('Whistle 托管规则内容或启用状态不一致');
     } catch (error) {
-      return { ok: false, rulesPath: generatedRulesPath, ruleCount: rules ? rules.split('\n').length : 0, message: `规则已提交，但验证 Whistle 失败：${error instanceof Error ? error.message : String(error)}` };
+      verifiedRules = null;
+      return { ok: false, verified: false, digest, checkedAt: new Date().toISOString(), rulesPath: generatedRulesPath, ruleCount: rules ? rules.split('\n').length : 0, message: `规则已提交，但验证 Whistle 失败：${error instanceof Error ? error.message : String(error)}` };
     }
   }
-  return {
+  const outcome = {
     ok: result.status === 0,
+    verified: result.status === 0,
+    digest,
+    checkedAt: new Date().toISOString(),
     rulesPath: generatedRulesPath,
     ruleCount: rules ? rules.split('\n').length : 0,
     message: result.status === 0 ? '规则已同步到 Whistle 客户端' : `规则文件已生成，Whistle 同步失败：${errorMessage}`,
   };
+  if (outcome.ok) { verifiedRules = rules; verifiedResult = outcome; }
+  else verifiedRules = null;
+  return outcome;
 };

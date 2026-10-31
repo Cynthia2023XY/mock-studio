@@ -85,3 +85,19 @@ test('隔离 Whistle：精确/模糊/重叠、元数据覆盖、错误顺序与�
   // 实际命中记录包含原始地址，绝非本地分发地址。
   assert.equal((await studio.call('/api/hits?projectId=p')).data.hits[0].actualUrl, 'https://secure.mock.test/query?x=%2f');
 });
+
+test('隔离 Whistle 将自动跨域预检转到分发器，不访问原服务也不推进步骤', { skip: !existsSync('/Applications/Whistle.app'), timeout: 20000 }, async (t) => {
+  const studio = await startStudio(t);
+  const proxy = await startProxy(t, `${studio.directory}/whistle`);
+  await studio.call('/api/projects', 'POST', { id: 'p', name: 'p' });
+  await studio.call('/api/projects/p/mocks', 'POST', { id: 'm', name: 'm', method: 'POST', match: { type: 'exact', value: 'http://unreachable.mock.test/query' } });
+  await studio.call('/api/projects/p/combinations', 'POST', { id: 'c', name: 'c', steps: [{ id: 's', mockId: 'm' }] });
+  await studio.call('/api/projects/p/combinations/c', 'PATCH', { enabled: true });
+  await studio.call('/api/projects/p', 'PATCH', { cors: { mode: 'allow-list', origins: ['https://page.test'], headers: ['authorization', 'content-type'], credentials: true } });
+  await proxy.setRules(compileWhistleRules((await studio.call('/api/state')).data, 'isolated-proxy-credential'));
+  const result = await proxyRequest(proxy.port, 'http://unreachable.mock.test/query', 'OPTIONS', '', { origin: 'https://page.test', 'access-control-request-method': 'POST', 'access-control-request-headers': 'authorization,content-type' });
+  assert.equal(result.status, 204, result.body);
+  assert.equal(result.headers['access-control-allow-origin'], 'https://page.test');
+  assert.equal(result.headers['access-control-allow-credentials'], 'true');
+  assert.equal((await studio.call('/api/hits?projectId=p')).data.hits.length, 0);
+});

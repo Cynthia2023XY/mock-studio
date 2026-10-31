@@ -5,7 +5,7 @@ import { newId, StudioError, validateProject, projectFingerprint } from './model
 import { checkConflicts, makeMock, validateMock } from './rules.mjs';
 
 /** 为场景包导出移除命中计数和共享执行位置 */
-export const exportProject = (project) => ({ version: 2, name: project.name, description: project.description, pageUrl: project.pageUrl, flow: project.flow ? { ...project.flow, currentState: project.flow.initialState } : undefined, endpoints: project.endpoints.map(({ stats: _stats, updatedAt: _updatedAt, sequence, ...endpoint }) => ({ ...endpoint, sequence: { afterEnd: sequence.afterEnd } })), mocks: (project.mocks ?? []).map(({ stats: _stats, ...mock }) => mock), combinations: (project.combinations ?? []).map((item) => ({ ...item, currentIndex: 0 })) });
+export const exportProject = (project) => ({ version: 2, name: project.name, description: project.description, pageUrl: project.pageUrl, cors: project.cors, flow: project.flow ? { ...project.flow, currentState: project.flow.initialState } : undefined, endpoints: project.endpoints.map(({ stats: _stats, updatedAt: _updatedAt, sequence, ...endpoint }) => ({ ...endpoint, sequence: { afterEnd: sequence.afterEnd } })), mocks: (project.mocks ?? []).map(({ stats: _stats, ...mock }) => mock), combinations: (project.combinations ?? []).map((item) => ({ ...item, currentIndex: 0 })) });
 
 /** 预览旧固定和顺序接口迁移，旧状态流程整体保留 */
 export const previewMigration = (project) => {

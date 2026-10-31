@@ -12,7 +12,7 @@ test('首次读取创建空注册表，重复读取保留用户数据，显式�
   await mkdir(path.join(directory, 'server'));
   await mkdir(path.join(directory, 'desktop'));
   await mkdir(path.join(directory, 'data'));
-  await Promise.all(['store.mjs', 'model.mjs', 'rules.mjs'].map((file) => copyFile(new URL(file, import.meta.url), path.join(directory, 'server', file))));
+  await Promise.all(['store.mjs', 'model.mjs', 'rules.mjs', 'cors.mjs'].map((file) => copyFile(new URL(file, import.meta.url), path.join(directory, 'server', file))));
   await copyFile(new URL('../desktop/empty-registry.json', import.meta.url), path.join(directory, 'desktop/empty-registry.json'));
   // 子进程避免模块缓存和当前环境影响默认路径测试。
   const environment = { ...process.env };

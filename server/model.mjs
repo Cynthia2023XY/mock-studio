@@ -1,5 +1,7 @@
 import { validateCombinations, makeMock } from './rules.mjs';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
+import { validateHeaderName, validateHeaderValue } from 'node:http';
+import { validateCors } from './cors.mjs';
 
 /** 生成可稳定引用的本地资源编号 */
 export const newId = (prefix) => `${prefix}-${randomUUID()}`;
@@ -35,9 +37,19 @@ export const validateVariant = (variant) => {
   if (!Number.isInteger(variant.status) || variant.status < 200 || variant.status > 599 || [204, 205, 304].includes(variant.status)) throw new StudioError('INVALID_STATUS', '状态码需为可携带 JSON 的 200–599');
   if (!Number.isFinite(variant.delayMs) || variant.delayMs < 0 || variant.delayMs > 120000) throw new StudioError('INVALID_DELAY', '延迟需在 0–120000 毫秒之间');
   if (!variant.headers || typeof variant.headers !== 'object' || Array.isArray(variant.headers)) throw new StudioError('INVALID_HEADERS', '响应头必须为对象');
+  const headers = Object.create(null);
   for (const [name, value] of Object.entries(variant.headers)) {
-    if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name) || typeof value !== 'string' || /[\r\n]/.test(value)) throw new StudioError('INVALID_HEADERS', '响应头名称或值无效');
+    try {
+      validateHeaderName(name);
+      if (typeof value !== 'string') throw new Error();
+      validateHeaderValue(name, value);
+    } catch { throw new StudioError('INVALID_HEADERS', '响应头名称或值无效；中文等非 Latin-1 值请先编码'); }
+    const key = name.toLowerCase();
+    if (Object.hasOwn(headers, key)) throw new StudioError('INVALID_HEADERS', '响应头名称不能仅以大小写区分');
+    if (/^(x-mock-|connection$|transfer-encoding$|content-length$|content-encoding$)/i.test(key)) throw new StudioError('INVALID_HEADERS', '响应头不能覆盖 Mock 标记或传输头');
+    headers[key] = value;
   }
+  variant.headers = headers;
   if (!Object.hasOwn(variant, 'body') || variant.body === undefined) throw new StudioError('INVALID_BODY', '场景必须包含 JSON 响应体');
   return variant;
 };
@@ -102,6 +114,7 @@ export const validateProject = (project) => {
   checkId(project.id);
   if (typeof project.name !== 'string' || !project.name.trim() || typeof project.enabled !== 'boolean' || !Array.isArray(project.endpoints)) throw new StudioError('INVALID_PROJECT', '项目配置无效');
   checkUrl(project.pageUrl, true);
+  validateCors(project.cors);
   // 项目内的接口编号必须唯一。
   const ids = new Set();
   for (const endpoint of project.endpoints) {
@@ -135,7 +148,7 @@ export const preparePackage = (pack, projectId) => {
   if (!pack || ![1, 2].includes(pack.version) || (pack.version === 1 && !Array.isArray(pack.endpoints))) throw new StudioError('INVALID_PACKAGE', '场景包版本或接口列表无效');
   if (![pack.endpoints ?? [], pack.mocks ?? [], pack.combinations ?? []].every(Array.isArray) || (pack.version === 1 && ((pack.mocks?.length ?? 0) || (pack.combinations?.length ?? 0)))) throw new StudioError('INVALID_PACKAGE', '场景包集合无效或版本不兼容');
   // 批量导入默认关闭，激活由调用者显式决定。
-  const project = { id: projectId, name: pack.name || '导入的场景包', description: pack.description || '导入的本地 Mock 项目', pageUrl: pack.pageUrl || '', enabled: false, updatedAt: new Date().toISOString(), endpoints: [] };
+  const project = { id: projectId, name: pack.name || '导入的场景包', description: pack.description || '导入的本地 Mock 项目', pageUrl: pack.pageUrl || '', cors: pack.cors, enabled: false, updatedAt: new Date().toISOString(), endpoints: [] };
   for (const input of pack.endpoints ?? []) {
     // 按统一默认值补全场景包中的接口配置。
     const endpoint = makeEndpoint({ ...input, enabled: input.enabled ?? true });
@@ -165,6 +178,7 @@ export const preparePackage = (pack, projectId) => {
 export const projectFingerprint = (project) => {
   // 仅忽略运行数据，用户对配置的修改必须阻止无意覆盖。
   const copy = structuredClone(project);
+  delete copy.revision;
   delete copy.updatedAt;
   delete copy.enabled;
   if (copy.flow) delete copy.flow.currentState;
@@ -177,3 +191,6 @@ export const projectFingerprint = (project) => {
   for (const combination of copy.combinations ?? []) delete combination.currentIndex;
   return JSON.stringify(copy);
 };
+
+/** 配置版本包含项目总开关，排除运行进度、计数和派生版本字段 */
+export const projectRevision = (project) => createHash('sha256').update(projectFingerprint(project)).update(String(Boolean(project.enabled))).digest('hex');

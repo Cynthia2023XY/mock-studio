@@ -1,4 +1,5 @@
-import { StudioError } from './model.mjs';
+import { StudioError, projectRevision } from './model.mjs';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { constants } from 'node:fs';
 import { copyFile, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -15,6 +16,17 @@ const emptyRegistryPath = path.resolve(moduleDirectory, '../desktop/empty-regist
 
 /** 串行化写入队列，避免连续切换状态时覆盖数据 */
 let writeQueue = Promise.resolve();
+
+/** 请求版本检查随事务传递，不影响 CLI 未携带版本的兼容请求 */
+const revisionScope = new AsyncLocalStorage();
+const readOnly = Symbol('readOnly');
+/** 在串行队列中完成一致性读取，但不写回未修改的数据 */
+export const withoutWrite = (value) => ({ [readOnly]: true, value });
+export const withRevision = (request, callback) => revisionScope.run({ revision: request.headers['if-match'], pathname: new URL(request.url, 'http://localhost').pathname, checked: false }, callback);
+
+const updateRevisions = (registry) => {
+  for (const project of registry.projects) project.revision = projectRevision(project);
+};
 
 /** 读取当前完整 Mock 注册表 */
 export const readRegistry = async () => {
@@ -36,6 +48,7 @@ export const readRegistry = async () => {
     project.mocks ??= [];
     project.combinations ??= [];
   }
+  updateRevisions(registry);
   return registry;
 };
 
@@ -44,6 +57,7 @@ export const writeRegistry = async (registry) => {
   /** 本次写入使用的临时文件 */
   const temporaryPath = `${registryPath}.tmp`;
   writeQueue = writeQueue.catch(() => {}).then(async () => {
+    updateRevisions(registry);
     await writeFile(temporaryPath, `${JSON.stringify(registry, null, 2)}\n`, 'utf8');
     await rename(temporaryPath, registryPath);
   });
@@ -58,7 +72,16 @@ export const mutateRegistry = async (mutator) => {
   writeQueue = writeQueue.catch(() => {}).then(async () => {
     /** 变更前的最新注册表 */
     const registry = await readRegistry();
+    const guard = revisionScope.getStore();
+    if (guard?.revision && !guard.checked) {
+      const parts = guard.pathname.split('/');
+      const project = parts[2] === 'projects' ? registry.projects.find((item) => item.id === parts[3]) : parts[2] === 'endpoints' ? findEndpoint(registry, parts[3])?.project : null;
+      if (project && guard.revision !== `"${project.revision}"`) throw new StudioError('CONFIG_CONFLICT', '项目配置已被其他窗口修改，请保留草稿并重新打开最新配置后再保存', 409);
+      guard.checked = true;
+    }
     mutationResult = await mutator(registry);
+    if (mutationResult?.[readOnly]) { mutationResult = mutationResult.value; return; }
+    updateRevisions(registry);
     /** 本次写入使用的临时文件 */
     const temporaryPath = `${registryPath}.tmp`;
     await writeFile(temporaryPath, `${JSON.stringify(registry, null, 2)}\n`, 'utf8');

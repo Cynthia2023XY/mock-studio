@@ -19,7 +19,8 @@ export const validateMock = (mock) => {
   if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'].includes(mock.method)) throw new StudioError('INVALID_METHOD', '请求方法无效');
   if (!['exact', 'contains'].includes(mock.match?.type) || typeof mock.match.value !== 'string' || !mock.match.value.trim() || mock.match.value.length > 2048 || Array.from(mock.match.value).some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)) throw new StudioError('INVALID_MATCH', '匹配值需为 1–2048 字符，不得含控制字符');
   if (mock.match.type === 'exact') mock.match.value = normalizeUrl(mock.match.value);
-  validateVariant({ ...mock.response, id: mock.id, name: mock.name });
+  const response = validateVariant({ ...mock.response, id: mock.id, name: mock.name });
+  mock.response.headers = response.headers;
   // 运行响应不能覆盖内部命中标记或改变传输协议。
   if (Object.keys(mock.response.headers).some((name) => /^(x-mock-|connection$|transfer-encoding$|content-length$|content-encoding$)/i.test(name))) throw new StudioError('INVALID_HEADERS', '响应头不能覆盖 Mock 标记或传输头');
   return mock;
