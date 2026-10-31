@@ -1,10 +1,11 @@
 'use client';
 
+import { apiRequest } from '@/lib/management-api';
 import { MockWorkspace } from '@/components/mock-workspace';
 import type { SingleMock, Combination } from '@/components/mock-workspace';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent } from 'react';
-import { Activity, Braces, CheckCircle2, ChevronRight, CircleDot, Clock3, Copy, Database, FileJson2, MoreHorizontal, Play, Plus, RotateCcw, Search, Settings2, Shuffle, TerminalSquare, Zap, Upload, Download, ChevronDown } from 'lucide-react';
+import { Activity, Braces, CheckCircle2, ChevronRight, CircleDot, Clock3, Copy, Database, FileJson2, MoreHorizontal, Play, Plus, RotateCcw, Search, Settings2, Shuffle, TerminalSquare, Zap, Upload, Download, ChevronDown, FlaskConical } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
@@ -34,35 +35,7 @@ type MockHit = { delivery?: 'selected' | 'finished' | 'failed' | 'aborted'; comb
 /** 当前打开的场景编辑目标 */
 type EditorTarget = { endpointId: string; variantId: string };
 
-/** 本地 Mock 管理 API 地址 */
-const apiBase = 'http://127.0.0.1:17321';
-
-/** 缓存本机控制台可读取的管理接口令牌 */
-let tokenPromise: Promise<string> | null = null;
-
-/** 从本地管理服务获取本机访问令牌 */
-const getManagementToken = () => {
-  if (!tokenPromise) tokenPromise = fetch(`${apiBase}/api/token`).then(async (response) => {
-    if (!response.ok) throw new Error('无法获取本地管理令牌');
-    // 本机服务返回的令牌只用于调用管理 API。
-    const data = await response.json() as { token: string };
-    return data.token;
-  }).catch((error) => { tokenPromise = null; throw error; });
-  return tokenPromise;
-};
-
-/** 带统一错误处理的管理 API 请求 */
-const apiRequest = async <T,>(pathname: string, options: RequestInit = {}): Promise<T> => {
-  /** 管理 API 的原始响应 */
-  const headers = new Headers(options.headers);
-  headers.set('content-type', 'application/json');
-  headers.set('x-mock-token', await getManagementToken());
-  const response = await fetch(`${apiBase}${pathname}`, { ...options, signal: options.signal ?? AbortSignal.timeout(25000), headers });
-  /** 管理 API 解析后的数据 */
-  const data = await response.json() as T & { message?: string };
-  if (!response.ok) throw new Error(data.message ?? `HTTP ${response.status}`);
-  return data;
-};
+const demoUrl = '/demo';
 
 /** 将时间格式化为适合状态栏展示的短文本 */
 const formatTime = (value: string | null) => {
@@ -132,7 +105,11 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    const initialLoad = window.setTimeout(() => void loadRegistry(), 0);
+    const initialLoad = window.setTimeout(() => {
+      const selected = new URLSearchParams(window.location.search).get('project');
+      if (selected) setActiveProjectId(selected);
+      void loadRegistry();
+    }, 0);
     /** 实时刷新接口命中数和顺序进度的定时器 */
     const timer = window.setInterval(() => void loadRegistry(true), 2000);
     return () => { window.clearTimeout(initialLoad); window.clearInterval(timer); };
@@ -424,7 +401,7 @@ export default function Home() {
           <nav className="no-scrollbar flex min-w-0 flex-1 items-end gap-1 overflow-x-auto self-stretch pt-3">
             {(registry?.projects ?? []).map((project) => <button key={project.id} onClick={() => changeProject(project.id)} className={`relative flex h-full min-w-fit items-center gap-2 rounded-t-lg px-4 text-sm transition ${activeProject?.id === project.id ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}><span className={`size-1.5 rounded-full ${project.enabled ? 'bg-emerald-400' : 'bg-slate-700'}`} />{project.name}{activeProject?.id === project.id && <span className="absolute inset-x-3 bottom-0 h-0.5 rounded-full bg-violet-400" />}</button>)}
             <button onClick={() => setCreatingProject(true)} className="grid size-9 min-w-9 place-items-center self-center rounded-lg border border-dashed border-border text-muted-foreground hover:border-violet-400/50 hover:text-violet-300" title="新增项目"><Plus className="size-4" /></button>
-          </nav><ThemeToggle />
+          </nav><a href={demoUrl} aria-label="功能体验" onClick={(event) => { if (saving || workspaceGuard.busy) { event.preventDefault(); setFeedback('正在保存，请稍后打开功能体验。'); } }} className="flex shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-sm text-muted-foreground hover:bg-muted hover:text-foreground"><FlaskConical className="size-4" /><span className="hidden sm:inline">功能体验</span></a><ThemeToggle />
 
         </div>
       </header>

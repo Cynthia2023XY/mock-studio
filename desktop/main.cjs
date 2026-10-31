@@ -113,7 +113,7 @@ const startServices = async () => {
     // 解析请求路径并将首页映射到构建入口。
     const pathname = new URL(request.url, 'http://127.0.0.1').pathname;
     // 仅允许访问构建生成的页面和静态资源。
-    const relative = pathname === '/' ? 'index.html' : pathname.slice(1);
+    const relative = ['/', '/demo', '/demo/'].includes(pathname) ? 'index.html' : pathname.slice(1);
     if (!/^(index\.html|assets\/[a-zA-Z0-9_.-]+)$/.test(relative)) { response.writeHead(404).end(); return; }
     // 构建目录内的实际资源文件。
     const file = path.join(staticRoot, relative);

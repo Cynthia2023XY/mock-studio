@@ -1,16 +1,235 @@
 {
   "version": 2,
-  "name": "Mock Studio 示例",
-  "description": "用于练习导入、启用与命中验证，使用保留的 example.test 域名。",
+  "name": "Mock Studio 功能体验",
+  "description": "配合功能体验页练习真实代理命中；测试域名没有原始服务，未命中时请求可能失败。",
+  "cors": {
+    "mode": "allow-list",
+    "origins": [
+      "http://127.0.0.1:3000",
+      "http://localhost:3000"
+    ],
+    "headers": [
+      "content-type",
+      "x-demo-client"
+    ],
+    "credentials": false
+  },
   "mocks": [
     {
-      "id": "demo-query",
-      "name": "示例查询",
+      "id": "demo-tasks",
+      "name": "任务查询",
       "method": "GET",
-      "match": { "type": "exact", "value": "http://example.test/mock-studio/demo" },
-      "response": { "status": 200, "delayMs": 0, "headers": {}, "body": { "success": true, "message": "Mock Studio 示例命中" } }
+      "match": {
+        "type": "exact",
+        "value": "http://demo.mock-studio.test/api/tasks"
+      },
+      "response": {
+        "status": 200,
+        "delayMs": 0,
+        "headers": {},
+        "body": {
+          "success": true,
+          "task": {
+            "id": "demo-task",
+            "title": "完成第一次 Mock",
+            "reward": 20,
+            "claimed": false
+          }
+        }
+      }
+    },
+    {
+      "id": "demo-slow",
+      "name": "慢速查询",
+      "method": "GET",
+      "match": {
+        "type": "exact",
+        "value": "http://demo.mock-studio.test/api/tasks/slow"
+      },
+      "response": {
+        "status": 200,
+        "delayMs": 1500,
+        "headers": {},
+        "body": {
+          "success": true,
+          "task": {
+            "id": "demo-task",
+            "title": "慢一点，也能准确返回",
+            "reward": 20,
+            "claimed": false
+          }
+        }
+      }
+    },
+    {
+      "id": "demo-error",
+      "name": "失败响应",
+      "method": "GET",
+      "match": {
+        "type": "exact",
+        "value": "http://demo.mock-studio.test/api/tasks/error"
+      },
+      "response": {
+        "status": 500,
+        "delayMs": 0,
+        "headers": {},
+        "body": {
+          "success": false,
+          "message": "这是练习用的服务异常，请稍后再试"
+        }
+      }
+    },
+    {
+      "id": "demo-exact",
+      "name": "精确匹配 · 参数顺序",
+      "method": "GET",
+      "match": {
+        "type": "exact",
+        "value": "http://demo.mock-studio.test/api/tasks/search?status=todo&page=1"
+      },
+      "response": {
+        "status": 200,
+        "delayMs": 0,
+        "headers": {},
+        "body": {
+          "success": true,
+          "task": {
+            "id": "demo-task",
+            "title": "精确匹配成功",
+            "reward": 20,
+            "claimed": false
+          }
+        }
+      }
+    },
+    {
+      "id": "demo-contains",
+      "name": "模糊匹配 · 任务搜索",
+      "method": "GET",
+      "match": {
+        "type": "contains",
+        "value": "http://demo.mock-studio.test/api/tasks/search"
+      },
+      "response": {
+        "status": 200,
+        "delayMs": 0,
+        "headers": {},
+        "body": {
+          "success": true,
+          "task": {
+            "id": "demo-task",
+            "title": "模糊匹配成功",
+            "reward": 20,
+            "claimed": false
+          }
+        }
+      }
+    },
+    {
+      "id": "demo-before",
+      "name": "领取前查询",
+      "method": "GET",
+      "match": {
+        "type": "exact",
+        "value": "http://demo.mock-studio.test/api/rewards/status"
+      },
+      "response": {
+        "status": 200,
+        "delayMs": 0,
+        "headers": {},
+        "body": {
+          "success": true,
+          "task": {
+            "id": "demo-task",
+            "title": "完成练习，领取奖励",
+            "reward": 20,
+            "claimed": false
+          }
+        }
+      }
+    },
+    {
+      "id": "demo-claim",
+      "name": "领取成功",
+      "method": "POST",
+      "match": {
+        "type": "exact",
+        "value": "http://demo.mock-studio.test/api/rewards/claim"
+      },
+      "response": {
+        "status": 200,
+        "delayMs": 0,
+        "headers": {},
+        "body": {
+          "success": true,
+          "message": "领取成功，获得 20 积分"
+        }
+      }
+    },
+    {
+      "id": "demo-after",
+      "name": "领取后查询",
+      "method": "GET",
+      "match": {
+        "type": "exact",
+        "value": "http://demo.mock-studio.test/api/rewards/status"
+      },
+      "response": {
+        "status": 200,
+        "delayMs": 0,
+        "headers": {},
+        "body": {
+          "success": true,
+          "task": {
+            "id": "demo-task",
+            "title": "完成练习，领取奖励",
+            "reward": 20,
+            "claimed": true
+          }
+        }
+      }
+    },
+    {
+      "id": "demo-cors",
+      "name": "跨域提交",
+      "method": "POST",
+      "match": {
+        "type": "exact",
+        "value": "http://demo.mock-studio.test/api/submit"
+      },
+      "response": {
+        "status": 200,
+        "delayMs": 0,
+        "headers": {},
+        "body": {
+          "success": true,
+          "message": "JSON 和自定义请求头已送达"
+        }
+      }
     }
   ],
-  "combinations": [],
+  "combinations": [
+    {
+      "id": "demo-reward-flow",
+      "name": "领取奖励流程",
+      "steps": [
+        {
+          "id": "demo-step-before",
+          "mockId": "demo-before"
+        },
+        {
+          "id": "demo-step-claim",
+          "mockId": "demo-claim"
+        },
+        {
+          "id": "demo-step-after",
+          "mockId": "demo-after"
+        }
+      ],
+      "currentIndex": 0,
+      "afterEnd": "hold-last",
+      "onUnexpectedRequest": "error"
+    }
+  ],
   "endpoints": []
 }

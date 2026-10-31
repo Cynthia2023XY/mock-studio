@@ -18,6 +18,8 @@ npx tsc --noEmit
 | `npm run test:coverage` | 前端测试及 V8 覆盖率报告 |
 | `npm run test:api` | 现有 Node 后端、CLI、存储及代理回归 |
 | `npm run test:all` | 先运行后端，再运行前端 |
+| `npm run test:e2e` | 构建桌面 UI 并运行真实 Whistle + Chromium Demo 回归 |
+| `npm run test:regression` | 单元、API 和浏览器完整回归 |
 | `npm run lint` | 检查服务端、页面、业务组件、UI 模型和测试 |
 
 覆盖率 HTML 位于 `coverage/index.html`，同时输出 `lcov.info` 与 JSON 汇总。`coverage/` 已忽略，不提交生成文件。流水线可分别运行后端测试与 `test:coverage`，避免重复执行同一组前端测试。
@@ -56,3 +58,13 @@ jsdom 不计算真实布局，不能证明两种主题的对比度、侧栏宽�
 - 涉及代理链路时执行真实 Whistle 回归；未安装指定 Whistle 的机器会跳过对应测试，不能把跳过解释为代理验证通过。
 
 发版前同时运行 `npm run build` 与 `npm run build:desktop-ui`。桌面 UI 通过 `public/assets/theme-init.js` 在渲染前恢复主题，Vite 会复制到 `desktop-dist/assets/`；这个路径也在桌面静态服务允许的资源范围内。
+
+## Demo 浏览器回归
+
+详见 [功能体验页](demo.md)。新增 `lib/demo.ts` 请求服务、`components/demo-page.tsx` 和 `tests/demo.test.tsx`，复用已有 Vitest 环境验证无自动业务请求、创建时保护已有项目、来源判定、500、网络失败、取消、超时、请求参数与管理凭据隔离、共享组合重置确认。
+
+`playwright.config.ts` 和 `e2e/` 使用固定版本 `@playwright/test`。先执行 `npx playwright install chromium --no-shell`；`npm run test:e2e` 要求本机安装 Whistle.app，依赖缺失时失败，不跳过。测试浏览器的业务请求真实经过隔离 Whistle，测试启动脚本只改写管理请求地址，由本地转发入口调用临时注册表服务；业务请求保持浏览器原生 fetch，避免 DevTools 网络拦截影响预检。随机来源仅加入测试场景包白名单。不接触开发用 3000/17321 服务或用户代理规则。
+
+新增 Web 路由 `/demo`，桌面入口也识别该路径；浏览器回归使用实际桌面构建产物，覆盖直达页面、控制台往返、深浅主题与窄屏布局。Web 构建仍需独立验证。
+
+本次 Demo 验证记录（2026-10-31）：前端 33 项、后端 40 项、真实 Whistle 浏览器 6 项全部通过，无跳过；lint、TypeScript、Web 与桌面 UI 构建通过。新 Demo 请求服务的行/分支覆盖率为 100%，Demo 组件行覆盖率为 79.31%；项目整体覆盖率仍包含未全面覆盖的旧首页，不设人为抬高的门槛。既有开发服务未被重启，跨域预检缓存修复需重启后端后在开发服务生效。未重新打桌面安装包。

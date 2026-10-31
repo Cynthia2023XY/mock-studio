@@ -48,3 +48,4 @@ next-env.d.ts
 /data/generated/mock-notice.inject.js
 /output/playwright/
 /.playwright-cli/
+/playwright-report/

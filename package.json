@@ -13,14 +13,16 @@
     "start": "wrangler dev --config dist/server/wrangler.json",
     "mock": "node bin/mockctl.mjs",
     "test:api": "node --test server/*.test.mjs",
-    "lint": "oxlint server scripts bin app/page.tsx components/*.tsx lib tests vitest.config.ts",
+    "lint": "oxlint server scripts bin app/page.tsx app/demo components/*.tsx lib tests e2e vitest.config.ts playwright.config.ts",
     "format": "oxfmt",
     "build:desktop-ui": "vite build --config desktop/vite.config.mjs",
     "package:mac": "npm run build:desktop-ui && electron-builder --mac dmg --arm64",
     "test": "vitest --config vitest.config.ts",
     "test:run": "vitest run --config vitest.config.ts",
     "test:coverage": "vitest run --config vitest.config.ts --coverage",
-    "test:all": "npm run test:api && npm run test:run"
+    "test:all": "npm run test:api && npm run test:run",
+    "test:e2e": "npm run build:desktop-ui && playwright test",
+    "test:regression": "npm run test:all && npm run test:e2e"
   },
   "dependencies": {
     "@base-ui/react": "1.7.0",
@@ -47,6 +49,7 @@
     "@cloudflare/vite-plugin": "1.37.1",
     "@cloudflare/workers-types": "4.20260515.1",
     "@openai/sites-vite-plugin": "0.2.0",
+    "@playwright/test": "1.64.1",
     "@tailwindcss/postcss": "4.2.1",
     "@testing-library/dom": "10.4.2",
     "@testing-library/jest-dom": "7.0.1",

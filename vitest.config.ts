@@ -16,7 +16,7 @@ export default defineConfig({
       provider: 'v8',
       reporter: ['text', 'html', 'lcov', 'json-summary'],
       reportsDirectory: 'coverage',
-      include: ['app/page.tsx', 'components/*.tsx', 'lib/ui-model.mjs'],
+      include: ['app/page.tsx', 'app/demo/page.tsx', 'components/*.tsx', 'lib/ui-model.mjs', 'lib/demo.ts', 'lib/management-api.ts'],
       exclude: ['components/ui/**'],
     },
   },

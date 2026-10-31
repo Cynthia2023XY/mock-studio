@@ -63,6 +63,7 @@ test('跨域自动预检和拒绝不推进组合，409 使用相同策略，显�
   assert.equal(preflight.headers.get('access-control-allow-origin'), 'https://page.test');
   assert.equal(preflight.headers.get('access-control-allow-credentials'), 'true');
   assert.match(preflight.headers.get('vary'), /Origin/);
+  assert.equal(preflight.headers.get('access-control-max-age'), '0');
   assert.equal((await invoke('http://test/query', 'OPTIONS', { 'access-control-request-method': 'POST', 'access-control-request-headers': 'x-secret' })).status, 403);
   assert.equal((await invoke('http://test/query', 'OPTIONS', { 'access-control-request-method': 'DELETE' })).status, 403);
   const denied = await invoke('http://test/query', 'POST', { origin: 'https://denied.test' });

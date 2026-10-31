@@ -36,6 +36,8 @@ export const resolveCors = (registry, request, url) => {
     if (!origin || requested.some((name) => !allowed.includes(name))) return { headers, denied: true };
     headers['access-control-allow-methods'] = method;
     headers['access-control-allow-headers'] = requested.join(', ');
+    // 调试中修改白名单应立即生效，避免浏览器复用此前允许的预检结果。
+    headers['access-control-max-age'] = '0';
   }
   return { headers, preflight };
 };
